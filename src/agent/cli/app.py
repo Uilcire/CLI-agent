@@ -3,8 +3,8 @@
 import sys
 
 from agent.config.settings import load_settings
-from agent.cli.display import print_assistant, print_banner
-from agent.core.loop import run
+from agent.cli.display import print_banner, prompt_user, stream_assistant
+from agent.core.loop import run_streaming
 
 
 def main() -> None:
@@ -20,12 +20,12 @@ def main() -> None:
 
     while True:
         try:
-            user_input = input("You: ").strip()
+            user_input = prompt_user()
         except KeyboardInterrupt:
             print("\nBye.")
             break
         if not user_input or user_input.lower() in ("quit", "exit"):
             print("Bye.")
             break
-        response = run(user_input, settings)
-        print_assistant(response)
+        events = run_streaming(user_input, settings)
+        stream_assistant(events)
