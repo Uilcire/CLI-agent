@@ -7,7 +7,10 @@ from openai import OpenAI
 
 from agent.config.settings import Settings
 from agent.core.state import ConversationState
+from agent.logger import get_logger
 from agent.tools.registry import execute, get_tools
+
+log = get_logger(__name__)
 
 # Stream event types: (type, data)
 # - ("content_delta", {"delta": str})
@@ -17,18 +20,32 @@ from agent.tools.registry import execute, get_tools
 
 
 def run_streaming(
-    user_message: str, settings: Settings
+    user_message: str,
+    settings: Settings,
+    state: ConversationState | None = None,
 ) -> Generator[tuple[str, dict], None, str]:
     """
     Run one user turn with streaming. Yields (event_type, data) tuples.
 
     Events: content_delta, tool_call, tool_result, done.
+
+    If state is provided, appends the user message and continues the conversation.
+    If state is None, creates a fresh conversation (single-turn).
     """
-    state = ConversationState(system_prompt="You are a helpful cli code assistant.")
+    if state is None:
+        state = ConversationState(
+            system_prompt=(
+                "You are a helpful cli code assistant.\n\n"
+                "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
+                "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
+                "A confirmation dialog will automatically pop up when permission has not been granted this session."
+            )
+        )
     state.add_user_message(user_message)
 
     client = OpenAI(api_key=settings.api_key)
     tools = get_tools()
+    log.debug("ReAct loop started, messages=%d", len(state.get_messages()))
 
     def build_messages() -> list[dict]:
         msgs = []
@@ -38,9 +55,11 @@ def run_streaming(
         return msgs
 
     while True:
+        msgs = build_messages()
+        log.info("Message sent to API: model=%s, messages=%d", settings.model, len(msgs))
         stream = client.chat.completions.create(
             model=settings.model,
-            messages=build_messages(),
+            messages=msgs,
             tools=tools,
             tool_choice="auto",
             max_completion_tokens=settings.max_tokens,
@@ -85,6 +104,8 @@ def run_streaming(
             else None
         )
         full_content = "".join(content_buf)
+        if full_content.strip():
+            log.info("Content returned from API: %d chars", len(full_content.strip()))
 
         tool_calls_list = [
             tool_calls_buf[i]
@@ -105,6 +126,7 @@ def run_streaming(
         )
 
         if finish_reason == "stop":
+            log.info("Model finished (stop)")
             yield ("done", {"text": full_content.strip()})
             return full_content.strip()
 
@@ -119,13 +141,18 @@ def run_streaming(
                     args = {}
 
                 yield ("tool_call", {"name": name, "args": args, "id": t["id"]})
+                log.info("Tool called: %s", name)
                 result = execute(name, args)
+                result_preview = result[:80] + "..." if len(result) > 80 else result
+                log.info("Tool %s returned: %s", name, result_preview.replace("\n", " "))
                 tool_results.append({"tool_call_id": t["id"], "content": result})
                 yield ("tool_result", {"name": name, "result": result})
 
             state.add_tool_results(tool_results)
+            log.debug("Tool results added, continuing ReAct loop")
             continue
 
+        log.warning("Unexpected finish_reason=%s, returning text", finish_reason)
         yield ("done", {"text": full_content.strip()})
         return full_content.strip()
 
@@ -141,7 +168,14 @@ def run(user_message: str, settings: Settings) -> str:
     4. If model calls tools (finish_reason="tool_calls"): execute each,
        append results to state, go back to step 2.
     """
-    state = ConversationState(system_prompt="You are a helpful cli code assistant.")
+    state = ConversationState(
+        system_prompt=(
+            "You are a helpful cli code assistant.\n\n"
+            "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
+            "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
+            "A confirmation dialog will automatically pop up when permission has not been granted this session."
+        )
+    )
     state.add_user_message(user_message)
 
     client = OpenAI(api_key=settings.api_key)
@@ -156,9 +190,11 @@ def run(user_message: str, settings: Settings) -> str:
         return msgs
 
     while True:
+        msgs = build_messages()
+        log.info("Message sent to API: model=%s, messages=%d", settings.model, len(msgs))
         response = client.chat.completions.create(
             model=settings.model,
-            messages=build_messages(),
+            messages=msgs,
             tools=tools,
             tool_choice="auto",
             max_completion_tokens=settings.max_tokens,
@@ -169,6 +205,8 @@ def run(user_message: str, settings: Settings) -> str:
 
         # Store assistant message (content + tool_calls if any)
         content = msg.content if msg.content else None
+        if content and content.strip():
+            log.info("Content returned from API: %d chars", len(content.strip()))
         tool_calls_raw = msg.tool_calls
         tool_calls = (
             [
@@ -202,6 +240,7 @@ def run(user_message: str, settings: Settings) -> str:
                 except json.JSONDecodeError:
                     args = {}
 
+                log.info("Tool called: %s", name)
                 result = execute(name, args)
                 tool_results.append({"tool_call_id": tc.id, "content": result})
 

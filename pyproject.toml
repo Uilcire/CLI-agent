@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 agent = "agent.cli.app:main"
+log-server = "agent.log_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent"]

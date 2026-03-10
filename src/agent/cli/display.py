@@ -1,12 +1,17 @@
 """Display layer: pretty-print assistant output using Rich."""
 
+from typing import Literal
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.box import ROUNDED
+from rich.markup import escape
+from rich.prompt import Prompt
 from rich.text import Text
 
 # Neon blue hex
 NEON_BLUE = "#00d4ff"
+DeleteChoice = Literal["delete_grant", "delete_no_grant", "cancel"]
 # Prompt: "You:" in bold green
 PROMPT_STYLE = "bold light_green"
 
@@ -40,13 +45,9 @@ def stream_assistant(events) -> str:
                 in_content_block = False
             name, args = data["name"], data["args"]
             args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
-            console.print(Text(f"⟳ [bold cyan]{name}[/bold cyan]({args_str})"))
+            console.print(Text.from_markup(f"⟳ [bold cyan]{escape(str(name))}[/bold cyan]({escape(args_str)})"))
         elif event_type == "tool_result":
             in_content_block = False
-            name, result = data["name"], data["result"]
-            preview = result[:200] + "…" if len(result) > 200 else result
-            preview = preview.replace("\n", " ")
-            console.print(Text(f"← [dim]{name}[/dim]: {preview}"))
         elif event_type == "done":
             final_text = data.get("text", "")
             if in_content_block:
@@ -86,3 +87,35 @@ def prompt_user() -> str:
     w = console.width
     result = console.input(f"[{PROMPT_STYLE}]You:[/{PROMPT_STYLE}]\n").strip()
     return result
+
+
+def confirm_delete(path: str) -> DeleteChoice:
+    """
+    Show a permission box for deleting a file or directory.
+    Returns one of: "delete_grant", "delete_no_grant", "cancel".
+    When stdin is not a TTY (e.g. piped input), defaults to cancel.
+    """
+    import sys
+    if not sys.stdin.isatty():
+        return "cancel"
+    console = Console()
+    options = (
+        f"[dim]1.[/dim] Delete [cyan]{escape(path)}[/cyan] and grant permission to delete its contents in the future\n"
+        f"[dim]2.[/dim] Delete [cyan]{escape(path)}[/cyan] and do not grant future permission\n"
+        f"[dim]3.[/dim] Do not delete"
+    )
+    content = f"Permission to delete?\n\n{options}\n"
+    console.print(
+        Panel(
+            content,
+            title="[bold]Confirm Delete[/bold]",
+            border_style="yellow",
+            box=ROUNDED,
+        )
+    )
+    choice = Prompt.ask(
+        "Choose",
+        choices=["1", "2", "3"],
+        default="3",
+    )
+    return {"1": "delete_grant", "2": "delete_no_grant", "3": "cancel"}[choice]

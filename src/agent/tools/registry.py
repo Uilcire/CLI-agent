@@ -1,6 +1,10 @@
 """Tool registry: definitions for the API and execution dispatch."""
 
+from agent.logger import get_logger
 from agent.tools import (
+    check_permissions as check_permissions_module,
+    delete_dir as delete_dir_module,
+    delete_file as delete_file_module,
     dummy,
     file_rewrite as file_rewrite_module,
     list_dir as list_dir_module,
@@ -9,6 +13,8 @@ from agent.tools import (
     str_replace as str_replace_module,
     write_file as write_file_module,
 )
+
+log = get_logger(__name__)
 
 
 def get_tools() -> list[dict]:
@@ -133,6 +139,48 @@ def get_tools() -> list[dict]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_file",
+                "description": "Delete a file at the given path. A confirmation dialog pops up automatically when permission not granted. Call when user confirms deletion (e.g. 'yes').",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file to delete (relative or absolute)"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_dir",
+                "description": "Delete a directory and all its contents recursively. A confirmation dialog pops up automatically when permission not granted. Call when user confirms deletion (e.g. 'yes').",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the directory to delete (relative or absolute)"},
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "check_permissions",
+                "description": "Check current delete permissions. Without path: list all granted paths. With path: check if that path has delete permission (won't prompt when deleting).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Optional path to check. If omitted, lists all granted paths."},
+                    },
+                    "required": [],
+                },
+            },
+        },
     ]
 
 
@@ -149,6 +197,7 @@ def execute(name: str, args: dict) -> str:
         so the model can adapt instead of crashing the loop.
     """
     try:
+        log.debug("Dispatching tool %s with args %s", name, args)
         if name == "echo":
             return dummy.echo(args["message"])
         if name == "read_file":
@@ -165,6 +214,14 @@ def execute(name: str, args: dict) -> str:
             return make_dir_module.make_dir(args["path"], args.get("parents", True))
         if name == "file_rewrite":
             return file_rewrite_module.file_rewrite(args["path"], args["content"])
+        if name == "delete_file":
+            return delete_file_module.delete_file(args["path"])
+        if name == "delete_dir":
+            return delete_dir_module.delete_dir(args["path"])
+        if name == "check_permissions":
+            return check_permissions_module.check_permissions(args.get("path"))
+        log.warning("Unknown tool requested: %s", name)
         return f"Error: Unknown tool: {name}"
     except Exception as e:
+        log.error("Tool %s failed: %s", name, e, exc_info=True)
         return f"Error: {e}"
