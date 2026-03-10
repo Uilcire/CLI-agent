@@ -32,7 +32,7 @@ Optional env vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_MODEL` | `gpt-5-mini-2025-08-07` | Model to use |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Model to use |
 | `OPENAI_MAX_TOKENS` | `4096` | Max completion tokens |
 
 ## Running
@@ -198,7 +198,7 @@ OPENAI_API_KEY=your-api-key-here
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `OPENAI_MODEL` | `gpt-5-mini-2025-08-07` | 使用的模型 |
+| `OPENAI_MODEL` | `gpt-4o-mini` | 使用的模型 |
 | `OPENAI_MAX_TOKENS` | `4096` | 最大补全 token 数 |
 
 ## 运行

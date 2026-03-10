@@ -11,7 +11,7 @@ class Settings:
     """Holds API key, model name, and max tokens. Loaded from env."""
 
     api_key: str
-    model: str = "gpt-5-mini-2025-08-07"
+    model: str = "gpt-4o-mini"
     max_tokens: int = 4096
 
 
@@ -31,7 +31,7 @@ def load_settings() -> Settings:
         )
 
     model = (
-        os.environ.get("OPENAI_MODEL") or "gpt-5-mini-2025-08-07"
+        os.environ.get("OPENAI_MODEL") or "gpt-4o-mini"
     ).strip()
     max_tokens_str = (os.environ.get("OPENAI_MAX_TOKENS") or "4096").strip()
 
