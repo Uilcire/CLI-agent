@@ -10,6 +10,9 @@ from datetime import datetime
 
 
 def main() -> None:
+    # Force unbuffered stdout so logs appear immediately (avoid buffering when not a TTY)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     host = ""
     port = int(os.environ.get("LOG_SERVER_PORT", "9999"))
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -56,7 +59,7 @@ def main() -> None:
                     msg_formatted = f"\033[1;96m{prefix}\033[0m: {rest}"
                 else:
                     msg_formatted = msg
-                print(f"\033[1;34m[{level}]\033[0m {ts_str} — {msg_formatted}")
+                print(f"\033[1;34m[{level}]\033[0m {ts_str} — {msg_formatted}", flush=True)
         except (ConnectionResetError, EOFError, pickle.UnpicklingError):
             pass
         finally:

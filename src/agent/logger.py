@@ -6,11 +6,28 @@ from logging.handlers import SocketHandler
 
 
 class SilentSocketHandler(SocketHandler):
-    """SocketHandler that silently ignores connection failures (no crash, no stderr)."""
+    """SocketHandler that silently ignores connection failures (no crash, no stderr).
+
+    Overrides emit() to close the socket after each send. This forces the kernel
+    to flush TCP send buffers immediately instead of holding data until process exit,
+    fixing the "logs only appear after quitting" behavior.
+    """
 
     def handleError(self, record: logging.LogRecord) -> None:
         """Suppress errors when log server is not running."""
         pass
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Send record and close socket so data flushes immediately."""
+        try:
+            s = self.makePickle(record)
+            self.send(s)
+        except Exception:
+            self.handleError(record)
+        finally:
+            # Close socket after each emit so TCP buffers flush immediately
+            self.close()
+            self.sock = None
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -32,3 +49,9 @@ def get_logger(name: str) -> logging.Logger:
 def _get_log_level() -> int:
     level_name = os.environ.get("LOG_LEVEL", "DEBUG").upper()
     return getattr(logging, level_name, logging.DEBUG)
+
+
+def is_log_debug() -> bool:
+    """True if LOG_DEBUG=true/1/yes. Enables streaming model responses to logs."""
+    v = (os.environ.get("LOG_DEBUG") or "").strip().lower()
+    return v in ("true", "1", "yes")

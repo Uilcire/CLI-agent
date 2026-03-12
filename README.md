@@ -12,7 +12,7 @@ A CLI agent built from scratch in Python, implementing the ReAct (Reasoning + Ac
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (recommended)
-- An OpenAI API key
+- An OpenAI API key **or** a ByteDance GPT API key (`GPT_AK`)
 
 ## Setup
 
@@ -22,18 +22,30 @@ A CLI agent built from scratch in Python, implementing the ReAct (Reasoning + Ac
 uv sync
 ```
 
-2. Create a `.env` file in the project root:
+2. Create a `.env` file in the project root. **Either** OpenAI **or** ByteDance GPT:
 
+**Option A — OpenAI:**
 ```
 OPENAI_API_KEY=your-api-key-here
+```
+
+**Option B — ByteDance GPT** (uses Azure-compatible API):
+```
+GPT_AK=your-bytedance-api-key
 ```
 
 Optional env vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_MODEL` | `gpt-4o-mini` | Model to use |
+| `USE_BYTEDANCE` | auto | `true` = ByteDance, `false` = OpenAI. Unset = auto-detect from keys |
+| `OPENAI_MODEL` | `gpt-4o-mini` (OpenAI) / `gpt-5.2-2025-12-11` (ByteDance) | Model to use |
 | `OPENAI_MAX_TOKENS` | `4096` | Max completion tokens |
+| `GPT_ENDPOINT` | `https://search.bytedance.net/gpt/openapi/online/v2/crawl` | ByteDance API base URL; include `/crawl` if you get 404 |
+| `GPT_MODEL` | — | Overrides model when using ByteDance |
+| `LOG_DEBUG` | `false` | `true` = stream model response tokens to logs (requires log-server + `LOG_LEVEL=DEBUG`) |
+| `LOG_LEVEL` | `DEBUG` | Log level: DEBUG, INFO, WARNING, ERROR |
+| `LOG_SERVER_PORT` | `9999` | Port for log-server (agent and log-server must use the same value) |
 
 ## Running
 

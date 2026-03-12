@@ -3,14 +3,33 @@
 import json
 from typing import Generator
 
-from openai import OpenAI
+from openai import AzureOpenAI, OpenAI
 
 from agent.config.settings import Settings
 from agent.core.state import ConversationState
-from agent.logger import get_logger
+from agent.logger import get_logger, is_log_debug
 from agent.tools.registry import execute, get_tools
 
 log = get_logger(__name__)
+
+
+def _create_client(settings: Settings):
+    """
+    Create OpenAI or AzureOpenAI client based on settings.backend.
+
+    ByteDance: Use AzureOpenAI with endpoint + ?ak=KEY (auth via query param).
+    Tested: https://search.bytedance.net/gpt/openapi/online/v2/crawl
+    """
+    if settings.backend == "bytedance":
+        base = settings.gpt_endpoint.rstrip("/").split("?")[0]
+        endpoint = f"{base}?ak={settings.api_key}"
+        return AzureOpenAI(
+            api_key=settings.api_key,
+            api_version=settings.gpt_api_version,
+            azure_endpoint=endpoint,
+        )
+    return OpenAI(api_key=settings.api_key)
+
 
 # Stream event types: (type, data)
 # - ("content_delta", {"delta": str})
@@ -43,9 +62,9 @@ def run_streaming(
         )
     state.add_user_message(user_message)
 
-    client = OpenAI(api_key=settings.api_key)
+    client = _create_client(settings)
     tools = get_tools()
-    log.debug("ReAct loop started, messages=%d", len(state.get_messages()))
+    log.debug("ReAct loop started, backend=%s, messages=%d", settings.backend, len(state.get_messages()))
 
     def build_messages() -> list[dict]:
         msgs = []
@@ -69,15 +88,30 @@ def run_streaming(
         content_buf: list[str] = []
         tool_calls_buf: dict[int, dict] = {}  # index -> {id, name, arguments}
         last_chunk = None
+        last_finish_reason = None  # from last chunk that had choices (usage chunk has empty choices)
+        chunk_count = 0
+        chunks_with_choices = 0
 
         for chunk in stream:
+            chunk_count += 1
             last_chunk = chunk
             if not chunk.choices:
+                if is_log_debug():
+                    log.debug("stream chunk #%d: empty choices", chunk_count)
                 continue
-            delta = chunk.choices[0].delta
+            chunks_with_choices += 1
+            choice = chunk.choices[0]
+            delta = choice.delta
+
+            if choice.finish_reason is not None:
+                last_finish_reason = choice.finish_reason
+                if is_log_debug():
+                    log.debug("stream chunk #%d: finish_reason=%r", chunk_count, choice.finish_reason)
 
             if delta.content:
                 content_buf.append(delta.content)
+                if is_log_debug():
+                    log.debug("model: %s", delta.content.replace("\n", "↵"))
                 yield ("content_delta", {"delta": delta.content})
 
             if delta.tool_calls:
@@ -101,9 +135,19 @@ def run_streaming(
         finish_reason = (
             last_chunk.choices[0].finish_reason
             if last_chunk and last_chunk.choices
-            else None
+            else last_finish_reason
         )
         full_content = "".join(content_buf)
+
+        stream_summary = (
+            "chunks=%d, with_choices=%d, content=%d chars, tool_calls=%d"
+            % (chunk_count, chunks_with_choices, len(full_content), len(tool_calls_buf))
+        )
+        if is_log_debug():
+            log.debug("Stream done: %s, finish_reason=%s", stream_summary, finish_reason)
+        elif finish_reason is None:
+            log.info("Stream summary: %s, finish_reason=%s", stream_summary, finish_reason)
+
         if full_content.strip():
             log.info("Content returned from API: %d chars", len(full_content.strip()))
 
@@ -152,7 +196,14 @@ def run_streaming(
             log.debug("Tool results added, continuing ReAct loop")
             continue
 
-        log.warning("Unexpected finish_reason=%s, returning text", finish_reason)
+        log.warning(
+            "Unexpected finish_reason=%s, returning text (stream: %d chunks, %d with choices, %d content chars, tool_calls=%d)",
+            finish_reason,
+            chunk_count,
+            chunks_with_choices,
+            len(full_content),
+            len(tool_calls_list),
+        )
         yield ("done", {"text": full_content.strip()})
         return full_content.strip()
 
@@ -178,7 +229,7 @@ def run(user_message: str, settings: Settings) -> str:
     )
     state.add_user_message(user_message)
 
-    client = OpenAI(api_key=settings.api_key)
+    client = _create_client(settings)
     tools = get_tools()
 
     # Build messages for API: optional system, then conversation
