@@ -92,7 +92,7 @@ def load_settings() -> Settings:
         ).strip()
     else:
         api_key = openai_key
-        model = (os.environ.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
+        model = (os.environ.get("OPENAI_MODEL") or "gpt-4o--mini").strip()
         gpt_endpoint = ""
         gpt_api_version = "2024-02-01"
 
