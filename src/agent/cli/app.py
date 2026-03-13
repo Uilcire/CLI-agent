@@ -1,5 +1,6 @@
 """REPL entry point: run the agent in an interactive loop."""
 
+import os
 import sys
 
 from agent.logger import get_logger
@@ -7,8 +8,58 @@ from agent.config.settings import load_settings
 from agent.cli.display import print_banner, prompt_user, stream_assistant
 from agent.core.loop import run_streaming
 from agent.core.state import ConversationState
+from agent.memory.manager import MemoryManager
 
 log = get_logger(__name__)
+
+
+def _resolve_project(memory: MemoryManager, cwd: str) -> str | None:
+    """
+    Determine project_id for this session via user interaction.
+    Three outcomes: resume existing, onboard new, link to existing, or skip.
+    Returns project_id string or None.
+    """
+    existing = memory.find_project_for_cwd(cwd)
+
+    if existing is not None:
+        print(f"Resuming project: {existing.description} [{', '.join(existing.tags)}]")
+        from agent.memory.onboarding import cwd_project_id
+        return cwd_project_id(cwd)
+
+    print("No project found for this directory.")
+    try:
+        choice = input("Start a new project, or link to an existing one? [new/existing/skip]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print("\nSkipping project setup.")
+        return None
+
+    if choice == "new":
+        project = memory.onboard_for_cwd(cwd, print_fn=print)
+        return project.project_id if project else None
+
+    if choice == "existing":
+        projects = memory._store.list_projects()
+        if not projects:
+            print("No existing projects found. Starting without project context.")
+            return None
+        print("\nExisting projects:")
+        for i, p in enumerate(projects, 1):
+            tags = ", ".join(p.tags) or "no tags"
+            print(f"  [{i}] {p.description} — {tags} | {len(p.sessions)} sessions")
+        try:
+            raw = input("\nEnter number (or 0 to skip): ").strip()
+            idx = int(raw)
+            if 1 <= idx <= len(projects):
+                chosen = projects[idx - 1]
+                print(f"Linked to: {chosen.description}")
+                return chosen.project_id
+        except (ValueError, EOFError):
+            pass
+        print("Starting without project context.")
+        return None
+
+    print("Starting without project context.")
+    return None
 
 
 def main() -> None:
@@ -25,26 +76,47 @@ def main() -> None:
     print("Type a message or 'quit' to exit.")
     log.info("Agent started, waiting for user input")
 
-    state = ConversationState(
-        system_prompt=(
-            "You are a helpful cli code assistant.\n\n"
-            "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
-            "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
-            "A confirmation dialog will automatically pop up when permission has not been granted this session."
-        )
+    memory_dir_raw = os.environ.get("MEMORY_DIR", "./agent-memory")
+    memory_dir = os.path.abspath(os.path.expanduser(memory_dir_raw))
+    os.makedirs(memory_dir, exist_ok=True)
+    log.info("Memory directory: %s", memory_dir)
+    memory = MemoryManager(data_dir=memory_dir, settings=settings)
+    cwd = os.getcwd()
+    project_id = _resolve_project(memory, cwd)
+    memory_context = memory.on_startup(project_id=project_id)
+
+    base_prompt = (
+        "You are a helpful cli code assistant.\n\n"
+        "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
+        "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
+        "A confirmation dialog will automatically pop up when permission has not been granted this session."
     )
-    while True:
-        try:
-            user_input = prompt_user()
-        except KeyboardInterrupt:
-            log.info("Agent stopped by user (Ctrl+C)")
-            print("\nBye.")
-            break
-        if not user_input or user_input.lower() in ("quit", "exit"):
-            log.info("Agent stopped by user (quit/exit)")
-            print("Bye.")
-            break
-        log.info("User message received: %s", user_input[:100] + ("..." if len(user_input) > 100 else ""))
-        events = run_streaming(user_input, settings, state=state)
-        final_text = stream_assistant(events)
-        log.info("Turn complete, assistant reply length=%d chars", len(final_text) if final_text else 0)
+    system_prompt = f"{memory_context}\n\n{base_prompt}" if memory_context else base_prompt
+    state = ConversationState(system_prompt=system_prompt)
+
+    try:
+        while True:
+            try:
+                user_input = prompt_user()
+            except KeyboardInterrupt:
+                log.info("Agent stopped by user (Ctrl+C)")
+                print("\nBye.")
+                break
+            if not user_input or user_input.lower() in ("quit", "exit"):
+                log.info("Agent stopped by user (quit/exit)")
+                print("Bye.")
+                break
+            cmd_result = memory.handle_command(user_input)
+            if cmd_result is not None:
+                print(cmd_result)
+                continue
+            log.info("User message received: %s", user_input[:100] + ("..." if len(user_input) > 100 else ""))
+            events = run_streaming(user_input, settings, state=state)
+            final_text = stream_assistant(events)
+            log.info("Turn complete, assistant reply length=%d chars", len(final_text) if final_text else 0)
+            memory.on_user_turn(user_input)
+            memory.on_assistant_turn(final_text or "")
+    finally:
+        status = memory.on_exit()
+        if status:
+            print(status)
