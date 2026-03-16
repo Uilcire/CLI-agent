@@ -19,12 +19,28 @@ def assemble_context(
     tokens_used = 0
 
     # 3. Personality section (always included in full, even if over budget)
+    # Also include an explicitly fictional short backstory if present.
     if personality is not None:
+        backstory = ""
+        try:
+            from pathlib import Path
+            p = Path(config.data_dir) / "backstory.txt"
+            if p.exists():
+                backstory = p.read_text(encoding="utf-8").strip()
+        except Exception:
+            backstory = ""
+
         person_section = f"""## Core Identity
 {personality.immutable_core}
 
 ## Soul
 {personality.soul}"""
+        if backstory:
+            person_section += f"""
+
+## Fictional Backstory
+{backstory}"""
+
         sections.append(person_section)
         tokens_used += count_tokens(person_section)
 

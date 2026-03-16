@@ -4,10 +4,14 @@ import json
 import re
 
 from agent.logger import get_logger
-from agent.memory.digest import merge_learnings
 from agent.memory.llm import LLMClient
 from agent.memory.models import ActiveSession, Personality
-from agent.memory.prompts import SOUL_FEEDBACK_SYSTEM, SOUL_FEEDBACK_USER
+from agent.memory.prompts import (
+    SOUL_FEEDBACK_SYSTEM,
+    SOUL_FEEDBACK_USER,
+    SOUL_MERGE_SYSTEM,
+    SOUL_MERGE_USER,
+)
 
 log = get_logger(__name__)
 
@@ -45,8 +49,18 @@ def patch_soul(
 
     try:
         existing = personality.soul
-        new_learnings = "\n".join(new_preferences)
-        merged_soul = merge_learnings(existing, new_learnings, llm)
+        new_prefs_text = "\n".join(new_preferences)
+        user_msg = (
+            SOUL_MERGE_USER.replace("{existing_soul}", existing)
+            .replace("{new_preferences}", new_prefs_text)
+        )
+        merged_soul = llm.complete(
+            system=SOUL_MERGE_SYSTEM, user=user_msg
+        ).strip()
+        # Enforce 300-word limit (keep first 300 whitespace-separated tokens)
+        words = [w for w in merged_soul.split() if w]
+        if len(words) > 300:
+            merged_soul = " ".join(words[:300])
         return Personality(
             soul=merged_soul,
             immutable_core=personality.immutable_core,

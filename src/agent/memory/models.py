@@ -42,6 +42,7 @@ class SessionDigest(BaseModel):
     summary: str
     capabilities: list[str] = Field(default_factory=list)
     learnings: str = ""
+    fictional_backstory: str = ""
 
 
 class ActiveSession(BaseModel):

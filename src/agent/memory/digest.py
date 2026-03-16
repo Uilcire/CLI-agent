@@ -29,6 +29,7 @@ def derive_digest(session: ActiveSession, llm: LLMClient) -> SessionDigest:
             summary="Empty session — no messages recorded.",
             capabilities=[],
             learnings="",
+            fictional_backstory="",
         )
 
     conversation = "\n".join(
@@ -44,6 +45,9 @@ def derive_digest(session: ActiveSession, llm: LLMClient) -> SessionDigest:
             parsed = json.loads(match.group())
             if "summary" not in parsed:
                 return None
+            # fictional_backstory is optional
+            if "fictional_backstory" not in parsed:
+                parsed["fictional_backstory"] = ""
             return parsed
         except json.JSONDecodeError:
             return None
@@ -55,6 +59,7 @@ def derive_digest(session: ActiveSession, llm: LLMClient) -> SessionDigest:
         summary="Session digest generation failed.",
         capabilities=[],
         learnings="",
+        fictional_backstory="",
     )
 
     for attempt in range(2):
@@ -70,6 +75,7 @@ def derive_digest(session: ActiveSession, llm: LLMClient) -> SessionDigest:
     if not isinstance(capabilities, list):
         capabilities = []
     learnings = parsed.get("learnings", "") or ""
+    fictional_backstory = parsed.get("fictional_backstory", "") or ""
 
     return SessionDigest(
         session_id=session.session_id,
@@ -78,6 +84,7 @@ def derive_digest(session: ActiveSession, llm: LLMClient) -> SessionDigest:
         summary=summary,
         capabilities=capabilities,
         learnings=learnings,
+        fictional_backstory=fictional_backstory,
     )
 
 

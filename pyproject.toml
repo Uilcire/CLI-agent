@@ -14,11 +14,14 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pyyaml>=6.0",
     "rich>=13.0.0",
+    "lark-oapi>=1.0.0",
+    "requests>=2.31.0",
 ]
 
 [project.scripts]
 agent = "agent.cli.app:main"
 log-server = "agent.log_server:main"
+feishu-bot = "agent.feishu.server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agent"]

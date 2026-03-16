@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from agent.memory.config import MemoryConfig
 from agent.tools.edit_common import atomic_write, syntax_check, validate_path
 
 
@@ -14,6 +15,14 @@ def str_replace(path: str, old_str: str, new_str: str) -> str:
     if isinstance(v, str):
         return v
     resolved = v
+
+    # personality.json must be edited via personality_edit tool
+    personality_path = Path(MemoryConfig().data_dir) / "personality.json"
+    if resolved.resolve() == personality_path.resolve():
+        return (
+            "Error: personality.json cannot be edited with str_replace. "
+            "Use the personality_edit tool to edit personality.json."
+        )
 
     if not resolved.exists():
         return f"Error: File not found: {path}"

@@ -99,8 +99,8 @@ def main() -> None:
         "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
         "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
         "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
-        "Output formatting: Before presenting your final answer to the user, always call the beautify tool "
-        "on your response text. Pass your draft answer to beautify, then present the beautified result as your reply."
+        "Output formatting: Only call the beautify tool when your response text would be hard for humans to read "
+        "(e.g. dense blocks, poor structure, unclear formatting). If it's already clear, present it as-is."
     )
 
     parts = []

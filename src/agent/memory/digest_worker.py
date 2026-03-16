@@ -29,6 +29,16 @@ def run_digest(session_id: str, data_dir: str) -> None:
     digest = derive_digest(session, llm)
     store.save_digest(digest)
 
+    # Auto-refresh explicitly fictional backstory when provided by digest.
+    try:
+        fb = (getattr(digest, "fictional_backstory", "") or "").strip()
+        if fb:
+            from pathlib import Path
+            p = Path(data_dir) / "backstory.txt"
+            p.write_text(fb + "\n", encoding="utf-8")
+    except Exception as e:
+        log.exception("digest_worker: backstory update failed: %s", e)
+
     if session.project_id is not None:
         project = store.get_project(session.project_id)
         if project is not None:

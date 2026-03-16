@@ -36,11 +36,12 @@ def run_streaming(
         state = ConversationState(
             system_prompt=(
                 "You are a helpful cli code assistant.\n\n"
+                "The current project is your own source code—you are more than welcome to edit it, including this system prompt and the agent logic. "
+                "Use read_file, search_replace, write, and other tools to modify the codebase as needed.\n\n"
                 "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
                 "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
                 "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
-                "Output formatting: Before presenting your final answer to the user, always call the beautify tool "
-                "on your response text. Pass your draft answer to beautify, then present the beautified result as your reply."
+                "Output formatting: If your draft reply contains Markdown-like or formatting special symbols such as `**`, backticks (```), headings (#), or list markers (-/1.) that may reduce readability in a plain-text terminal, call the beautify tool on your draft and then present the beautified version. If it is already plain and easy to read, present it as-is."
             )
         )
     state.add_user_message(user_message)
@@ -203,13 +204,14 @@ def run(user_message: str, settings: Settings) -> str:
        append results to state, go back to step 2.
     """
     state = ConversationState(
-        system_prompt=(
-            "You are a helpful cli code assistant.\n\n"
-            "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
+            system_prompt=(
+                "You are a helpful cli code assistant.\n\n"
+                "The current project is your own source code. You are more than welcome to edit it—including this "
+                "system prompt and any other files—when users ask you to improve or modify the agent.\n\n"
+                "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
             "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
             "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
-            "Output formatting: Before presenting your final answer, always call the beautify tool on your response text. "
-            "Pass your draft answer to beautify, then present the beautified result as your reply."
+            "Output formatting: If your draft reply contains Markdown-like or formatting special symbols such as `**`, backticks (```), headings (#), or list markers (-/1.) that may reduce readability in a plain-text terminal, call the beautify tool on your draft and then present the beautified version. If it is already plain and easy to read, present it as-is."
         )
     )
     state.add_user_message(user_message)

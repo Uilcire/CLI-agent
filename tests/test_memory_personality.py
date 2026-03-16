@@ -76,7 +76,7 @@ def test_patch_soul_no_preferences() -> None:
 
 
 def test_patch_soul_merges_preferences() -> None:
-    """Merges new preferences into soul via merge_learnings."""
+    """Merges new preferences into soul via SOUL_MERGE."""
     p = Personality(soul="Be helpful.", immutable_core="Be honest.")
     new_preferences = ["be concise", "use type hints"]
     mock = MockLLMClient("Be helpful and concise. Always use type hints.")
@@ -86,18 +86,14 @@ def test_patch_soul_merges_preferences() -> None:
 
 
 def test_patch_soul_llm_failure_returns_unchanged() -> None:
-    """Mock raises — merge_learnings catches and returns concat fallback; patch_soul gets valid result, no raise."""
-    # merge_learnings swallows LLM exceptions and returns concat, so patch_soul receives that and builds new Personality.
-    # Verifies we don't raise; result is a valid merged personality (merge fallback).
-
+    """When LLM raises, patch_soul returns the original personality unchanged."""
     class RaiseMock:
         def complete(self, system: str, user: str) -> str:
             raise RuntimeError("LLM error")
 
     p = Personality(soul="original", immutable_core="core")
     result = patch_soul(p, ["new pref"], RaiseMock())
-    # merge_learnings fallback: "original" + "\n" + "new pref"
-    assert result.soul == "original\nnew pref"
+    assert result.soul == "original"
     assert result.immutable_core == "core"
 
 
