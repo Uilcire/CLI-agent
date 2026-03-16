@@ -20,6 +20,7 @@ class ConversationState:
         """
         self._messages: list[dict] = []
         self._system_prompt = system_prompt
+        self.activated_skills: set[str] = set()
 
     def add_user_message(self, text: str) -> None:
         """

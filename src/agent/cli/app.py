@@ -2,6 +2,7 @@
 
 import os
 import sys
+from pathlib import Path
 
 from agent.logger import get_logger
 from agent.config.settings import load_settings
@@ -9,6 +10,10 @@ from agent.cli.display import print_banner, prompt_user, stream_assistant
 from agent.core.loop import run_streaming
 from agent.core.state import ConversationState
 from agent.memory.manager import MemoryManager
+from agent.skills.discovery import discover_skills
+from agent.skills.manager import SkillManager
+from agent.tools import registry as tool_registry
+from agent.tools.activate_skill import activate_skill as _activate_skill
 
 log = get_logger(__name__)
 
@@ -85,6 +90,10 @@ def main() -> None:
     project_id = _resolve_project(memory, cwd)
     memory_context = memory.on_startup(project_id=project_id)
 
+    # Discover skills and build catalog section for the system prompt.
+    skill_manager = SkillManager(discover_skills(Path(cwd)))
+    log.info("Skills loaded: %d", len(skill_manager.names()))
+
     base_prompt = (
         "You are a helpful cli code assistant.\n\n"
         "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
@@ -93,8 +102,25 @@ def main() -> None:
         "Output formatting: Before presenting your final answer to the user, always call the beautify tool "
         "on your response text. Pass your draft answer to beautify, then present the beautified result as your reply."
     )
-    system_prompt = f"{memory_context}\n\n{base_prompt}" if memory_context else base_prompt
+
+    parts = []
+    if memory_context:
+        parts.append(memory_context)
+    if not skill_manager.is_empty():
+        parts.append(skill_manager.catalog_xml())
+        parts.append(
+            "When a task matches a skill's description, call the `activate_skill` tool "
+            "with the skill's name to load its full instructions before proceeding. "
+            "When a skill references relative paths, resolve them against the skill "
+            "directory shown in the skill content."
+        )
+    parts.append(base_prompt)
+    system_prompt = "\n\n".join(parts)
+
     state = ConversationState(system_prompt=system_prompt)
+
+    # Wire the skill manager and state into the tool registry.
+    tool_registry.init(skill_manager, state)
 
     try:
         while True:
@@ -112,6 +138,26 @@ def main() -> None:
             if cmd_result is not None:
                 print(cmd_result)
                 continue
+
+            # /skills — list available skills
+            if user_input.strip() == "/skills":
+                if skill_manager.is_empty():
+                    print("No skills installed.")
+                else:
+                    for r in skill_manager.skills.values():
+                        print(f"  [{r.scope}] {r.name} — {r.description}")
+                continue
+
+            # /skill-name — explicit skill activation
+            if user_input.startswith("/") and not user_input.startswith("/memory"):
+                skill_name = user_input[1:].strip().lower()
+                if skill_manager.get(skill_name):
+                    content = _activate_skill(skill_name, skill_manager, state)
+                    state.add_user_message(f"Please load the '{skill_name}' skill.")
+                    state.add_assistant_message(content)
+                    print(f"Skill '{skill_name}' loaded into context.")
+                    continue
+                # Unknown slash command — fall through to the agent loop
             log.info("User message received: %s", user_input[:100] + ("..." if len(user_input) > 100 else ""))
             events = run_streaming(user_input, settings, state=state)
             final_text = stream_assistant(events)
