@@ -3,7 +3,7 @@
 from typing import Protocol
 
 from agent.config.settings import Settings
-from agent.core.loop import _create_client
+from agent.llm.client import create_client
 
 
 class LLMClient(Protocol):
@@ -18,7 +18,7 @@ class RealLLMClient:
     """Uses OpenAI/AzureOpenAI via agent.core.loop._create_client."""
 
     def __init__(self, settings: Settings) -> None:
-        self._client = _create_client(settings)
+        self._client = create_client(settings)
         self._model = settings.model
 
     def complete(self, system: str, user: str) -> str:

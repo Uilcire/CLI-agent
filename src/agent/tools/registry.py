@@ -2,6 +2,7 @@
 
 from agent.logger import get_logger
 from agent.tools import (
+    beautify as beautify_module,
     check_permissions as check_permissions_module,
     delete_dir as delete_dir_module,
     delete_file as delete_file_module,
@@ -11,6 +12,7 @@ from agent.tools import (
     make_dir as make_dir_module,
     read_file as read_file_module,
     str_replace as str_replace_module,
+    web_search as web_search_module,
     write_file as write_file_module,
 )
 
@@ -181,6 +183,35 @@ def get_tools() -> list[dict]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "description": "Search the web for information. Use when you need current, real-world information beyond the codebase. Requires PERPLEXITY_API_KEY in .env.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query string"},
+                        "max_results": {"type": "integer", "description": "Maximum number of results (default: 7)", "default": 7},
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "beautify",
+                "description": "Reformat text to be clearer and more human-readable using an LLM. Use on raw output, tool results, or any dense information before presenting to the user.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "Raw text to beautify"},
+                    },
+                    "required": ["text"],
+                },
+            },
+        },
     ]
 
 
@@ -220,6 +251,12 @@ def execute(name: str, args: dict) -> str:
             return delete_dir_module.delete_dir(args["path"])
         if name == "check_permissions":
             return check_permissions_module.check_permissions(args.get("path"))
+        if name == "web_search":
+            return web_search_module.web_search(
+                args["query"], args.get("max_results", 7)
+            )
+        if name == "beautify":
+            return beautify_module.beautify(args["text"])
         log.warning("Unknown tool requested: %s", name)
         return f"Error: Unknown tool: {name}"
     except Exception as e:

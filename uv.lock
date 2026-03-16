@@ -39,6 +39,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "openai" },
+    { name = "perplexityai" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "rich" },
@@ -53,6 +54,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "openai", specifier = ">=1.0.0" },
+    { name = "perplexityai", specifier = ">=0.30.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "rich", specifier = ">=13.0.0" },
@@ -269,6 +271,23 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/65/ee/299d360cdc32edc7d2cf530f3accf79c4fca01e96ffc950d8a52213bd8e4/packaging-26.0.tar.gz", hash = "sha256:00243ae351a257117b6a241061796684b084ed1c516a08c48a3f7e147a9d80b4", size = 143416, upload-time = "2026-01-21T20:50:39.064Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/b9/c538f279a4e237a006a2c98387d081e9eb060d203d8ed34467cc0f0b9b53/packaging-26.0-py3-none-any.whl", hash = "sha256:b36f1fef9334a5588b4166f8bcd26a14e521f2b55e6b9de3aaa80d3ff7a37529", size = 74366, upload-time = "2026-01-21T20:50:37.788Z" },
+]
+
+[[package]]
+name = "perplexityai"
+version = "0.30.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a4/8a/78f26bfd6031d40df29a19a8f32e7cb95e859cb492876527c123de257cc5/perplexityai-0.30.1.tar.gz", hash = "sha256:4a33ccd528d1ff95e172d3232afa5eb1369ee7208abbd6e320d77942586ad8a8", size = 130855, upload-time = "2026-02-24T19:31:11.205Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fc/1f/f7b980ac295d0f96b630eb82231ea78e329de2757dded1918274cbb94cae/perplexityai-0.30.1-py3-none-any.whl", hash = "sha256:261e13b75cf2d78daa89ec5db314ec4554c1835835d250489102529b37e76113", size = 127628, upload-time = "2026-02-24T19:31:10.249Z" },
 ]
 
 [[package]]

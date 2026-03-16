@@ -89,7 +89,9 @@ def main() -> None:
         "You are a helpful cli code assistant.\n\n"
         "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
         "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
-        "A confirmation dialog will automatically pop up when permission has not been granted this session."
+        "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
+        "Output formatting: Before presenting your final answer to the user, always call the beautify tool "
+        "on your response text. Pass your draft answer to beautify, then present the beautified result as your reply."
     )
     system_prompt = f"{memory_context}\n\n{base_prompt}" if memory_context else base_prompt
     state = ConversationState(system_prompt=system_prompt)

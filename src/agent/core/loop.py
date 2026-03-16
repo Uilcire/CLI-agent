@@ -3,32 +3,13 @@
 import json
 from typing import Generator
 
-from openai import AzureOpenAI, OpenAI
-
 from agent.config.settings import Settings
 from agent.core.state import ConversationState
+from agent.llm.client import create_client
 from agent.logger import get_logger, is_log_debug
 from agent.tools.registry import execute, get_tools
 
 log = get_logger(__name__)
-
-
-def _create_client(settings: Settings):
-    """
-    Create OpenAI or AzureOpenAI client based on settings.backend.
-
-    ByteDance: Use AzureOpenAI with endpoint + ?ak=KEY (auth via query param).
-    Tested: https://search.bytedance.net/gpt/openapi/online/v2/crawl
-    """
-    if settings.backend == "bytedance":
-        base = settings.gpt_endpoint.rstrip("/").split("?")[0]
-        endpoint = f"{base}?ak={settings.api_key}"
-        return AzureOpenAI(
-            api_key=settings.api_key,
-            api_version=settings.gpt_api_version,
-            azure_endpoint=endpoint,
-        )
-    return OpenAI(api_key=settings.api_key)
 
 
 # Stream event types: (type, data)
@@ -57,12 +38,14 @@ def run_streaming(
                 "You are a helpful cli code assistant.\n\n"
                 "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
                 "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
-                "A confirmation dialog will automatically pop up when permission has not been granted this session."
+                "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
+                "Output formatting: Before presenting your final answer to the user, always call the beautify tool "
+                "on your response text. Pass your draft answer to beautify, then present the beautified result as your reply."
             )
         )
     state.add_user_message(user_message)
 
-    client = _create_client(settings)
+    client = create_client(settings)
     tools = get_tools()
     log.debug("ReAct loop started, backend=%s, messages=%d", settings.backend, len(state.get_messages()))
 
@@ -224,12 +207,14 @@ def run(user_message: str, settings: Settings) -> str:
             "You are a helpful cli code assistant.\n\n"
             "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
             "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
-            "A confirmation dialog will automatically pop up when permission has not been granted this session."
+            "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
+            "Output formatting: Before presenting your final answer, always call the beautify tool on your response text. "
+            "Pass your draft answer to beautify, then present the beautified result as your reply."
         )
     )
     state.add_user_message(user_message)
 
-    client = _create_client(settings)
+    client = create_client(settings)
     tools = get_tools()
 
     # Build messages for API: optional system, then conversation
