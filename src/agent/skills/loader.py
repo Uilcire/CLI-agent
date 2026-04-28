@@ -1,14 +1,14 @@
 """Parse SKILL.md files into SkillRecord objects."""
 
-import logging
 import re
 from pathlib import Path
 
 import yaml
 
+from agent.logger import get_logger
 from agent.skills.models import SkillRecord
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 _DESCRIPTION_TRIGGERS = (

@@ -1,12 +1,12 @@
 """Filesystem scanner: discover SKILL.md files across known scope directories."""
 
-import logging
 from pathlib import Path
 
+from agent.logger import get_logger
 from agent.skills.loader import parse_skill_file
 from agent.skills.models import SkillRecord
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".agents", ".claude"}
 _MAX_DEPTH = 4
@@ -57,9 +57,17 @@ def discover_skills(cwd: Path) -> dict[str, SkillRecord]:
     scope) wins. A warning is logged when a skill is shadowed.
     """
     skills: dict[str, SkillRecord] = {}
+    seen_paths: set[Path] = set()
 
     for scan_dir, scope in get_scan_dirs(cwd):
         for skill_path in _walk_skill_dirs(scan_dir):
+            try:
+                resolved = skill_path.resolve()
+            except OSError:
+                resolved = skill_path
+            if resolved in seen_paths:
+                continue
+            seen_paths.add(resolved)
             record = parse_skill_file(skill_path, scope=scope)
             if record is None:
                 continue
