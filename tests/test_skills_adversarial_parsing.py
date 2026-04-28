@@ -415,16 +415,12 @@ def test_tools_with_nulls_numbers_nested_lists(tmp_path, caplog):
     with caplog.at_level(logging.WARNING):
         record = parse_skill_file(p)
     assert record is not None
-    # null → str(None) = "None" gets retained as a coerced string;
-    # numbers, nested list also coerced via str(); empty after strip dropped
-    # Bash kept verbatim. Document actual behavior:
-    assert "Bash" in record.allowed_tools
-    assert "42" in record.allowed_tools
-    assert "3.14" in record.allowed_tools
-    # None → str(None) = "None" is non-empty, so it's retained
-    assert "None" in record.allowed_tools
-    coercion_warnings = [r for r in caplog.records if "legacy dict-style" in r.message]
-    assert len(coercion_warnings) == 1
+    # Only valid string entries are kept; nulls, numbers, nested lists are
+    # dropped (not coerced to literal "None"/"42" etc) with one warning.
+    assert record.allowed_tools == ["Bash"]
+    drop_warnings = [r for r in caplog.records if "dropped" in r.message]
+    assert len(drop_warnings) == 1
+    assert "4" in drop_warnings[0].message  # 4 entries dropped: null, 42, list, 3.14
 
 
 # ---------------------------------------------------------------------------
@@ -453,13 +449,9 @@ def test_skill_at_depth_4_included(tmp_path, isolated_home):
     assert "d" in skills
 
 
-@pytest.mark.xfail(
-    reason="BUG: _MAX_DEPTH=4 with `if depth > _MAX_DEPTH: return` actually allows "
-           "recursion up to depth 5 because the check fires AFTER the increment "
-           "round. A SKILL.md nested 6 directories deep is still discovered.",
-    strict=True,
-)
 def test_skill_at_depth_5_excluded(tmp_path, isolated_home):
+    """_MAX_DEPTH is enforced consistently: nesting beyond 4 levels under the
+    scan root is not discovered."""
     base = tmp_path / ".claude" / "skills"
     nested = base / "a" / "b" / "c" / "d" / "e"
     nested.mkdir(parents=True)

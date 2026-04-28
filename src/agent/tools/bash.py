@@ -38,7 +38,7 @@ def run_bash(command: str, cwd: str | None = None, timeout: int = 60) -> str:
         if not run_cwd.exists() or not run_cwd.is_dir():
             return f"Error: cwd does not exist or is not a directory: {cwd}"
 
-    log.info("bash: %s (cwd=%s, timeout=%ss)", command, run_cwd, timeout)
+    log.debug("bash: %s (cwd=%s, timeout=%ss)", command, run_cwd, timeout)
 
     try:
         result = subprocess.run(

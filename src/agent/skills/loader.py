@@ -148,27 +148,36 @@ def _parse_allowed_tools(raw: object, path: Path) -> list[str]:
 
     result: list[str] = []
     coerced = False
+    dropped = 0
     for entry in raw:
         if isinstance(entry, str):
             s = entry.strip()
             if s:
                 result.append(s)
+            else:
+                dropped += 1
         elif isinstance(entry, dict):
             name = str(entry.get("name", "")).strip()
             if name:
                 result.append(name)
                 coerced = True
+            else:
+                dropped += 1
         else:
-            s = str(entry).strip()
-            if s:
-                result.append(s)
-                coerced = True
+            dropped += 1
 
     if coerced:
         log.warning(
             "Skill file %s has legacy dict-style tool entries; coerced to bare names. "
             "Skills should use Claude Code's allowed-tools whitelist format.",
             path,
+        )
+    if dropped:
+        log.warning(
+            "Skill file %s dropped %d unparseable tool entries (missing name, "
+            "wrong type, or empty)",
+            path,
+            dropped,
         )
 
     return result

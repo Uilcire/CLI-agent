@@ -248,28 +248,26 @@ class TestBashCwd:
 # ===========================================================================
 
 class TestBashLogging:
-    def test_command_is_info_logged(self, caplog):
-        with caplog.at_level(logging.INFO, logger="agent.tools.bash"):
+    def test_command_is_debug_logged(self, caplog):
+        """Commands log at DEBUG (not INFO) so default-level loggers don't
+        capture potentially sensitive command strings."""
+        with caplog.at_level(logging.DEBUG, logger="agent.tools.bash"):
             run_bash("echo logged")
         assert any(
-            "echo logged" in r.getMessage() and r.levelname == "INFO"
+            "echo logged" in r.getMessage() and r.levelname == "DEBUG"
             for r in caplog.records
         )
 
-    def test_secrets_are_not_redacted_warning(self, caplog):
-        """
-        DOCUMENTATION TEST: bash logs the literal command at INFO level with
-        no redaction. Anyone passing `bash("curl -H 'Authorization: Bearer
-        SECRET' ...")` will leak the secret to logs. Caller must not embed
-        secrets directly in the command string.
-        """
+    def test_command_not_logged_at_info_level(self, caplog):
+        """At INFO level, the bash command is NOT recorded — secrets passed in
+        the command string won't leak to default log handlers."""
         with caplog.at_level(logging.INFO, logger="agent.tools.bash"):
             run_bash("echo TOKEN=sk-not-a-real-secret-deadbeef")
         leaked = [
             r for r in caplog.records
             if "sk-not-a-real-secret-deadbeef" in r.getMessage()
         ]
-        assert leaked, "Secret-like substring should appear verbatim in logs (no redaction)."
+        assert not leaked
 
 
 # ===========================================================================

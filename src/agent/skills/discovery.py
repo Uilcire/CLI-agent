@@ -30,7 +30,7 @@ def get_scan_dirs(cwd: Path) -> list[tuple[Path, str]]:
 
 def _walk_skill_dirs(root: Path, depth: int = 0):
     """Yield paths to SKILL.md files found within root, up to _MAX_DEPTH levels deep."""
-    if depth > _MAX_DEPTH:
+    if depth >= _MAX_DEPTH:
         return
     try:
         entries = list(root.iterdir())
