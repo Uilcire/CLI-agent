@@ -37,13 +37,16 @@ def _walk_skill_dirs(root: Path, depth: int = 0):
     except PermissionError:
         return
     for entry in sorted(entries):
-        if not entry.is_dir() or entry.name in _SKIP_DIRS:
+        try:
+            if not entry.is_dir() or entry.name in _SKIP_DIRS:
+                continue
+            skill_file = entry / "SKILL.md"
+            if skill_file.is_file():
+                yield skill_file
+            else:
+                yield from _walk_skill_dirs(entry, depth + 1)
+        except PermissionError:
             continue
-        skill_file = entry / "SKILL.md"
-        if skill_file.is_file():
-            yield skill_file
-        else:
-            yield from _walk_skill_dirs(entry, depth + 1)
 
 
 def discover_skills(cwd: Path) -> dict[str, SkillRecord]:

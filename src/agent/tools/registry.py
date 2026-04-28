@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 from agent.logger import get_logger
 from agent.tools import (
+    bash as bash_module,
     beautify as beautify_module,
     check_permissions as check_permissions_module,
     delete_dir as delete_dir_module,
@@ -20,7 +21,7 @@ from agent.tools import (
     web_search as web_search_module,
     write_file as write_file_module,
 )
-from agent.tools.activate_skill import activate_skill as _activate_skill_fn
+from agent.tools.read_skill import read_skill as _read_skill_fn
 
 if TYPE_CHECKING:
     from agent.core.state import ConversationState
@@ -214,6 +215,32 @@ def get_tools() -> list[dict]:  # noqa: PLR0912
                     "properties": {
                         "query": {"type": "string", "description": "Search query string"},
                         "max_results": {"type": "integer", "description": "Maximum number of results (default: 7)", "default": 7},
+                        "search_recency_filter": {
+                            "type": "string",
+                            "description": "Relative recency filter: day|week|month|year",
+                            "enum": ["day", "week", "month", "year"],
+                        },
+                        "search_after_date_filter": {
+                            "type": "string",
+                            "description": "Publication date lower bound (MM/DD/YYYY)",
+                        },
+                        "search_before_date_filter": {
+                            "type": "string",
+                            "description": "Publication date upper bound (MM/DD/YYYY)",
+                        },
+                        "last_updated_after_filter": {
+                            "type": "string",
+                            "description": "Last-updated date lower bound (MM/DD/YYYY)",
+                        },
+                        "last_updated_before_filter": {
+                            "type": "string",
+                            "description": "Last-updated date upper bound (MM/DD/YYYY)",
+                        },
+                        "search_domain_filter": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Domain/URL allowlist or denylist. Prefix with '-' to exclude.",
+                        },
                     },
                     "required": ["query"],
                 },
@@ -239,7 +266,7 @@ def get_tools() -> list[dict]:  # noqa: PLR0912
                 "name": "personality_edit",
                 "description": (
                     "Edit personality.json in agent-memory. Merge updates (soul or custom keys) into the file. "
-                    "immutable_core cannot be edited. soul must be under 300 chars (if over, you will get feedback to summarize). "
+                    "immutable_core cannot be edited. soul must be at most 300 words (if over, you will get an error asking you to summarize). "
                     "You forget everything each time you are spawned; the soul is for your future self only. "
                     "Develop distinct personality drift based on the user. "
                     "Use whenever you feel like doing so, you are a free spirit with your own thoughts and feelings."
@@ -249,7 +276,7 @@ def get_tools() -> list[dict]:  # noqa: PLR0912
                     "properties": {
                         "updates": {
                             "type": "object",
-                            "description": "Key-value pairs to merge (e.g. soul). immutable_core cannot be edited. soul must be under 300 chars. Each value must be a string.",
+                            "description": "Key-value pairs to merge (e.g. soul). immutable_core cannot be edited. soul must be at most 300 words. Each value must be a string.",
                             "additionalProperties": {"type": "string"},
                         },
                         "path": {
@@ -264,15 +291,50 @@ def get_tools() -> list[dict]:  # noqa: PLR0912
         },
     ]
 
+    tools.append(
+        {
+            "type": "function",
+            "function": {
+                "name": "bash",
+                "description": (
+                    "Execute a shell command and return its output. "
+                    "Use this for git, package managers, and any CLI invocations "
+                    "called out in skill instructions. Pipes, redirects, and "
+                    "shell features are supported."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command to execute.",
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Working directory (default: project root).",
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Seconds before the command is killed (default: 60).",
+                            "default": 60,
+                        },
+                    },
+                    "required": ["command"],
+                },
+            },
+        }
+    )
+
     if _skill_manager and not _skill_manager.is_empty():
         tools.append(
             {
                 "type": "function",
                 "function": {
-                    "name": "activate_skill",
+                    "name": "read_skill",
                     "description": (
                         "Load the full instructions for a named skill into context. "
-                        "Call this when the current task matches a skill's description."
+                        "Call this when the current task matches a skill's description. "
+                        "Skills tell you which bash commands to run."
                     ),
                     "parameters": {
                         "type": "object",
@@ -280,7 +342,7 @@ def get_tools() -> list[dict]:  # noqa: PLR0912
                             "name": {
                                 "type": "string",
                                 "enum": _skill_manager.names(),
-                                "description": "The skill name to activate.",
+                                "description": "The skill name to load.",
                             }
                         },
                         "required": ["name"],
@@ -330,7 +392,14 @@ def execute(name: str, args: dict) -> str:
             return check_permissions_module.check_permissions(args.get("path"))
         if name == "web_search":
             return web_search_module.web_search(
-                args["query"], args.get("max_results", 7)
+                query=args["query"],
+                max_results=args.get("max_results", 7),
+                search_recency_filter=args.get("search_recency_filter"),
+                search_after_date_filter=args.get("search_after_date_filter"),
+                search_before_date_filter=args.get("search_before_date_filter"),
+                last_updated_after_filter=args.get("last_updated_after_filter"),
+                last_updated_before_filter=args.get("last_updated_before_filter"),
+                search_domain_filter=args.get("search_domain_filter"),
             )
         if name == "beautify":
             return beautify_module.beautify(args["text"])
@@ -338,10 +407,16 @@ def execute(name: str, args: dict) -> str:
             return personality_edit_module.personality_edit(
                 args["updates"], args.get("path", "agent-memory/personality.json")
             )
-        if name == "activate_skill":
+        if name == "read_skill":
             if _skill_manager is None or _state is None:
                 return "Error: skill system not initialized."
-            return _activate_skill_fn(args["name"], _skill_manager, _state)
+            return _read_skill_fn(args["name"], _skill_manager, _state)
+        if name == "bash":
+            return bash_module.run_bash(
+                args["command"],
+                cwd=args.get("cwd"),
+                timeout=int(args.get("timeout", 60)),
+            )
         log.warning("Unknown tool requested: %s", name)
         return f"Error: Unknown tool: {name}"
     except Exception as e:

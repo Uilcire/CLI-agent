@@ -1,4 +1,4 @@
-"""activate_skill tool: load full skill instructions into conversation context."""
+"""read_skill tool: load full skill instructions into conversation context."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from agent.skills.manager import SkillManager
 
 
-def activate_skill(
+def read_skill(
     name: str,
     skill_manager: "SkillManager",
     state: "ConversationState",
@@ -19,15 +19,14 @@ def activate_skill(
     Load the full instructions for a named skill into context.
 
     Returns a <skill_content> block with the skill body, the skill directory
-    path, and a listing of any bundled resource files (not eagerly read).
-    Returns an error string if the skill is unknown or already loaded.
+    path, a listing of any bundled resource files (not eagerly read), and the
+    skill's allowed-tools whitelist (informational only — not enforced).
+
+    Re-reading the same skill is allowed; the model may want to refresh.
     """
     skill = skill_manager.get(name)
     if skill is None:
         return f"Error: skill '{name}' not found."
-
-    if name in state.activated_skills:
-        return f"Skill '{name}' is already loaded in context."
 
     state.activated_skills.add(name)
 
@@ -52,6 +51,16 @@ def activate_skill(
         for r in resources:
             lines.append(f"  <file>{r}</file>")
         lines.append("</skill_resources>")
+
+    if skill.allowed_tools:
+        lines.append("<allowed_tools>")
+        for entry in skill.allowed_tools:
+            lines.append(f"  <tool>{entry}</tool>")
+        lines.append("</allowed_tools>")
+        lines.append(
+            "Note: allowed_tools is informational. Use the bash tool for any "
+            "shell commands the skill instructs you to run."
+        )
 
     lines.append("</skill_content>")
     return "\n".join(lines)

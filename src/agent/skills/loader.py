@@ -11,6 +11,17 @@ from agent.skills.models import SkillRecord
 log = logging.getLogger(__name__)
 
 
+_DESCRIPTION_TRIGGERS = (
+    "use when",
+    "用于",
+    "用来",
+    "适用",
+    "trigger",
+    "when the user",
+    "when to",
+)
+
+
 def parse_skill_file(path: Path, scope: str = "project") -> SkillRecord | None:
     """
     Parse a SKILL.md file and return a SkillRecord, or None if the file is invalid.
@@ -19,10 +30,11 @@ def parse_skill_file(path: Path, scope: str = "project") -> SkillRecord | None:
     - Missing or empty description → skip (return None)
     - Completely unparseable YAML → skip (return None)
     - Name mismatch with parent dir or name > 64 chars → warn, load anyway
+    - Description shorter than 30 chars or missing trigger phrase → warn, load anyway
     """
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, UnicodeDecodeError) as e:
         log.warning("Cannot read skill file %s: %s", path, e)
         return None
 
@@ -62,12 +74,27 @@ def parse_skill_file(path: Path, scope: str = "project") -> SkillRecord | None:
             path,
         )
 
+    desc_lower = description.lower()
+    if len(description) < 30 or not any(t in desc_lower for t in _DESCRIPTION_TRIGGERS):
+        log.warning(
+            "Skill '%s' description may be too short or lacks a clear trigger phrase "
+            "(consider including 'use when' / '用于' / 'trigger' etc.): %s",
+            name,
+            path,
+        )
+
+    raw_tools = data.get("allowed-tools")
+    if raw_tools is None:
+        raw_tools = data.get("tools")
+    allowed_tools = _parse_allowed_tools(raw_tools, path)
+
     return SkillRecord(
         name=name,
         description=description,
         location=path.resolve(),
         body=body,
         scope=scope,  # type: ignore[arg-type]
+        allowed_tools=allowed_tools,
     )
 
 
@@ -100,3 +127,48 @@ def _parse_yaml(yaml_block: str, path: Path) -> dict | None:
 
     log.warning("Skill file %s has unparseable YAML, skipping", path)
     return None
+
+
+def _parse_allowed_tools(raw: object, path: Path) -> list[str]:
+    """
+    Parse the allowed-tools / tools list from frontmatter.
+
+    Each entry may be:
+    - a scalar string like "Bash" or "Bash(git status:*)" → kept as-is
+    - a legacy dict with a "name" field → coerced to that bare name
+    Logs a single coercion warning if any dict entries were degraded.
+    """
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        log.warning(
+            "Skill file %s has non-list 'allowed-tools'/'tools' field, ignoring", path
+        )
+        return []
+
+    result: list[str] = []
+    coerced = False
+    for entry in raw:
+        if isinstance(entry, str):
+            s = entry.strip()
+            if s:
+                result.append(s)
+        elif isinstance(entry, dict):
+            name = str(entry.get("name", "")).strip()
+            if name:
+                result.append(name)
+                coerced = True
+        else:
+            s = str(entry).strip()
+            if s:
+                result.append(s)
+                coerced = True
+
+    if coerced:
+        log.warning(
+            "Skill file %s has legacy dict-style tool entries; coerced to bare names. "
+            "Skills should use Claude Code's allowed-tools whitelist format.",
+            path,
+        )
+
+    return result

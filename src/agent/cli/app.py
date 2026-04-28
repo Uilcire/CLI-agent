@@ -13,7 +13,7 @@ from agent.memory.manager import MemoryManager
 from agent.skills.discovery import discover_skills
 from agent.skills.manager import SkillManager
 from agent.tools import registry as tool_registry
-from agent.tools.activate_skill import activate_skill as _activate_skill
+from agent.tools.read_skill import read_skill as _read_skill
 
 log = get_logger(__name__)
 
@@ -96,6 +96,11 @@ def main() -> None:
 
     base_prompt = (
         "You are a helpful cli code assistant.\n\n"
+        "Problem-solving: Always try your best to find a way to solve problems asked by users. "
+        "Do not simply say \"it's not in my capability\". If the current tools or skills do not allow you to accomplish the task, "
+        "write new tools and skills to achieve it. If you don't have enough information to do something, always use the web_search tool.\n\n"
+        "Action first: For simple questions (e.g. 'what are today's headlines?'), do not ask for permission or clarification—assume from the user's perspective and take action (e.g. use web_search). When you do so, briefly explain your rationale so the user knows what decisions or assumptions you made and why.\n\n"
+        "Facts: Always use web_search to gather and verify information before answering. Do not rely on prior knowledge alone—always search and verify.\n\n"
         "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
         "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
         "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
@@ -109,10 +114,11 @@ def main() -> None:
     if not skill_manager.is_empty():
         parts.append(skill_manager.catalog_xml())
         parts.append(
-            "When a task matches a skill's description, call the `activate_skill` tool "
+            "When a task matches a skill's description, call the `read_skill` tool "
             "with the skill's name to load its full instructions before proceeding. "
-            "When a skill references relative paths, resolve them against the skill "
-            "directory shown in the skill content."
+            "Skills tell you which shell commands to run; use the `bash` tool to "
+            "execute them. When a skill references relative paths, resolve them "
+            "against the skill directory shown in the skill content."
         )
     parts.append(base_prompt)
     system_prompt = "\n\n".join(parts)
@@ -152,7 +158,7 @@ def main() -> None:
             if user_input.startswith("/") and not user_input.startswith("/memory"):
                 skill_name = user_input[1:].strip().lower()
                 if skill_manager.get(skill_name):
-                    content = _activate_skill(skill_name, skill_manager, state)
+                    content = _read_skill(skill_name, skill_manager, state)
                     state.add_user_message(f"Please load the '{skill_name}' skill.")
                     state.add_assistant_message(content)
                     print(f"Skill '{skill_name}' loaded into context.")

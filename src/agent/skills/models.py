@@ -1,6 +1,6 @@
 """Data models for the skills subsystem."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -14,3 +14,4 @@ class SkillRecord:
     location: Path          # absolute path to the SKILL.md file
     body: str               # markdown body with YAML frontmatter stripped
     scope: Literal["project", "user"]
+    allowed_tools: list[str] = field(default_factory=list)
