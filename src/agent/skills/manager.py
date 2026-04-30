@@ -32,7 +32,8 @@ class SkillManager:
         """
         lines = ["<available_skills>"]
         for skill in self._skills.values():
-            lines.append("  <skill>")
+            src_attr = escape(skill.source, {'"': "&quot;"})
+            lines.append(f'  <skill source="{src_attr}">')
             lines.append(f"    <name>{escape(skill.name)}</name>")
             lines.append(f"    <description>{escape(skill.description)}</description>")
             lines.append("  </skill>")

@@ -6,13 +6,13 @@
 
 <a id="cli-agent-english"></a>
 
-A CLI agent built from scratch in Python, implementing the ReAct (Reasoning + Acting) pattern. An interactive coding assistant that reads files, edits code, manages directories, and safely handles destructive operations—all from the terminal with streaming output. Includes a persistent memory system that tracks projects, summarizes sessions, and builds up context across conversations.
+A CLI agent built from scratch in Python, implementing the ReAct (Reasoning + Acting) pattern. An interactive coding assistant that reads files, edits code, manages directories, and safely handles destructive operations — all from the terminal with streaming output. Includes a markdown-native **assistant memory** layer that mirrors `CLAUDE.md`-style notes, retrieves relevant context per turn via two-stage LLM selection, and evolves the agent's "soul" through inline `[memory note: ...]` markers.
 
 ## Requirements
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) (recommended)
-- An OpenAI API key **or** a ByteDance GPT API key (`GPT_AK`)
+- An OpenAI API key, a ByteDance GPT API key (`GPT_AK`), **or** a DeepSeek API key (`DEEPSEEK_API_KEY`)
 
 ## Setup
 
@@ -22,7 +22,7 @@ A CLI agent built from scratch in Python, implementing the ReAct (Reasoning + Ac
 uv sync
 ```
 
-2. Create a `.env` file in the project root. **Either** OpenAI **or** ByteDance GPT:
+2. Create a `.env` file in the project root. **Either** OpenAI **or** ByteDance GPT **or** DeepSeek:
 
 **Option A — OpenAI:**
 ```
@@ -34,16 +34,28 @@ OPENAI_API_KEY=your-api-key-here
 GPT_AK=your-bytedance-api-key
 ```
 
+**Option C — DeepSeek** (OpenAI-compatible API):
+```
+DEEPSEEK_API_KEY=your-deepseek-api-key
+```
+
+Auto-detect priority when no `USE_*` flag is set: **DeepSeek → ByteDance → OpenAI**.
+
 Optional env vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `USE_BYTEDANCE` | auto | `true` = ByteDance, `false` = OpenAI. Unset = auto-detect from keys |
-| `OPENAI_MODEL` | `gpt-4o-mini` (OpenAI) / `gpt-5.2-2025-12-11` (ByteDance) | Model to use |
+| `USE_DEEPSEEK` | auto | `true` forces DeepSeek (requires `DEEPSEEK_API_KEY`) |
+| `USE_BYTEDANCE` | auto | `true` = ByteDance, `false` = fall through to DeepSeek/OpenAI |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Model to use for OpenAI |
+| `DEEPSEEK_MODEL` | `deepseek-v4-pro` | Default DeepSeek model (legacy) |
+| `DEEPSEEK_MODEL_PRO` | `deepseek-v4-pro` | Large model: main responses + curator judgment |
+| `DEEPSEEK_MODEL_FLASH` | `deepseek-v4-flash` | Small/fast model: two-stage memory retrieval |
+| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com` | DeepSeek API base URL |
 | `OPENAI_MAX_TOKENS` | `4096` | Max completion tokens |
 | `GPT_ENDPOINT` | `https://search.bytedance.net/gpt/openapi/online/v2/crawl` | ByteDance API base URL |
-| `GPT_MODEL` | — | Overrides model when using ByteDance |
-| `MEMORY_DIR` | `./agent-memory` | Directory for persistent memory storage |
+| `GPT_MODEL` | `gpt-5.2-2025-12-11` | Overrides model when using ByteDance |
+| `ASSISTANT_MEMORY_DIR` | `~/assistant-memory` | Markdown memory store root |
 | `LOG_DEBUG` | `false` | `true` = stream model response tokens to logs |
 | `LOG_LEVEL` | `DEBUG` | Log level: DEBUG, INFO, WARNING, ERROR |
 | `LOG_SERVER_PORT` | `9999` | Port for log-server |
@@ -54,13 +66,19 @@ Optional env vars:
 uv run agent
 ```
 
+Pass `-memlog` (or `--memlog`) to render memory subsystem events as orange `🧠 MEMORY` panels alongside tool calls — handy for understanding what the retrieval and curator layers are doing in real time:
+
+```bash
+uv run agent -memlog
+```
+
 For live debug logging, start the log server in a separate terminal before launching the agent:
 
 ```bash
 uv run log-server
 ```
 
-Type your message and press Enter. Use `quit`, `exit`, or Ctrl+C to leave.
+Type your message and press Enter. Use `quit`, `exit`, or Ctrl+C to leave. Press Ctrl+C twice in rapid succession to force-exit (skips finally and aborts in-flight curator/digest threads).
 
 ---
 
@@ -68,14 +86,7 @@ Type your message and press Enter. Use `quit`, `exit`, or Ctrl+C to leave.
 
 ### Streaming ReAct Loop
 
-The agent uses the ReAct pattern — it reasons, calls tools, observes results, and repeats until the task is complete. All output streams in real time: text tokens, tool invocations, and tool results appear as they arrive.
-
-**Turn flow:**
-1. User sends a message
-2. Model generates reasoning and/or tool calls
-3. Agent executes tools, appends results to conversation
-4. Model continues until it produces a final text response
-5. Multi-turn context is preserved across the entire session
+The agent reasons, calls tools, observes results, and repeats until the task is complete. All output streams in real time: text tokens, tool invocations, and tool results.
 
 ### Tools
 
@@ -90,33 +101,61 @@ The agent uses the ReAct pattern — it reasons, calls tools, observes results, 
 | `delete_file` | Delete | Delete a file (requires confirmation or prior permission grant) |
 | `delete_dir` | Delete | Recursively delete a directory (requires confirmation or prior permission grant) |
 | `check_permissions` | Utility | Query which paths have delete permission granted |
-| `echo` | Utility | Echo a message (for testing) |
+| `web_search` | Utility | Web search for facts and verification |
+| `read_skill` | Utility | Load a skill's full instructions into context |
 
-### Persistent Memory
+### Assistant Memory
 
-The agent remembers context across sessions using a local JSON store (`agent-memory/`).
+The agent maintains a **markdown-native** memory store at `~/assistant-memory/` (override with `ASSISTANT_MEMORY_DIR`). The layout mirrors `CLAUDE.md`-style human-readable notes — no JSON shadow store, no embeddings.
 
-**At startup**, the agent checks if the current directory is a known project:
-- If recognized, it resumes the project and injects recent session digests + learnings into the system prompt.
-- If new, it offers to onboard: scanning the directory, classifying the project with the LLM (tags, capabilities), and seeding from similar past projects.
-- You can also link to an existing project or skip entirely.
+```
+~/assistant-memory/
+├── _index.md                   # top-level manifest (always read at startup)
+├── identity/
+│   ├── _manifest.md
+│   ├── me.md                   # the user's identity
+│   └── agent.md                # agent's soul; frontmatter holds immutable_core
+├── people/<name>.md            # one file per person
+├── preferences/<topic>.md      # food, coffee, reading, gifts, travel, …
+├── projects/<project>.md       # frontmatter has cwd, status, tags
+├── context/current.md          # this week's state — always injected
+└── log/YYYY-MM/YYYY-MM-DD.md   # daily session digests; monthly summaries in _manifest
+```
 
-**During the session**, every user and assistant turn is recorded.
+**Per-turn retrieval (read side).** Before each model call:
+1. `_index.md` + recent turns + the user query feed a Stage-1 LLM (`deepseek-v4-flash`) that picks scopes (`people`, `preferences`, `projects`, `log`).
+2. Selected scope manifests feed a Stage-2 LLM that picks up to 5 specific files.
+3. Those files plus `context/current.md` are injected as a transient system suffix for that turn only — never polluting conversation history.
 
-**On exit**, a background subprocess generates a digest of the conversation (summary, learnings, capability updates) so the main process exits immediately without waiting.
+**Curator (write side).** After each assistant reply, a background daemon thread runs the curator (`deepseek-v4-pro`):
+- Scans the user message for declarative facts and the assistant reply for `[memory note: ...]` markers.
+- Layer 1 (silent): trivial extractions (e.g. "I'm allergic to peanuts" → append to `preferences/food.md`).
+- Layer 2 (confirm): ambiguous or contradicting facts. *(Confirm callback is currently a no-op — Layer 2 silently skipped pending UI work.)*
+- Updates the affected manifest line incrementally.
 
-**Memory commands** (type in the agent REPL):
+**On exit.** A consolidation pass + per-day session digest run in a daemon thread. The agent prints `Dreaming...` and exits. The most recent per-turn curator is joined for up to 2s before consolidation runs so manifests aren't read stale.
+
+**Soul evolution.** The agent's mutable "soul" lives in the body of `identity/agent.md`. The immutable values (frontmatter `immutable_core`) are always appended to the system prompt — they never depend on retrieval. Soul updates flow through the curator's `[memory note: ...]` channel.
+
+**Slash commands** (type in the agent REPL):
 
 | Command | Description |
 |---------|-------------|
-| `/memory show` | Show current project context and recent digest |
-| `/memory projects` | List all tracked projects |
-| `/memory init` | Onboard the current directory as a new project |
-| `/memory clear learnings` | Clear accumulated learnings for the current project |
-| `/memory personality show` | Show the agent's current personality |
-| `/memory personality set soul "<text>"` | Update the agent's soul |
-| `/memory personality set core "<text>"` | Update the agent's immutable core |
+| `/memory list <scope>` | List files in a scope (e.g. `people`, `projects`) |
+| `/memory show <scope>/<file>` | Print a memory file with frontmatter |
+| `/memory rebuild <scope>` | Regenerate a scope manifest from scratch |
+| `/memory current` | Show `context/current.md` |
 | `/memory help` | Show all memory commands |
+| `/skills` | List installed skills |
+| `/<skill-name>` | Load a skill's instructions into context |
+
+**Migration from the old JSON store.** If you have a legacy `agent-memory/` directory from a prior version, run:
+
+```bash
+uv run python -m scripts.migrate_to_assistant_memory
+```
+
+The script converts `personality.json` → `identity/agent.md`, projects + digests → markdown, and renames the old dir to `agent-memory.legacy/`.
 
 ### Permission System for Destructive Operations
 
@@ -131,16 +170,16 @@ Delete operations (`delete_file`, `delete_dir`) are protected by a session-scope
 
 ### Safety Features
 
-- **Path validation**: All write and edit operations are confined to the current working directory.
-- **Atomic writes**: File writes go to a temp file first, then atomically renamed — no partial writes on failure.
-- **Syntax checking**: After editing Python or JSON files, the agent validates syntax and surfaces warnings.
+- **Path validation**: Edit operations are confined to the current working directory.
+- **Atomic writes**: File writes go to a temp file then atomically renamed.
+- **Syntax checking**: After editing Python or JSON files, the agent validates syntax.
 - **Non-TTY safe**: Delete confirmation defaults to "cancel" when stdin is not a terminal.
 
 ### Rich Terminal UI
 
 - Startup banner with project name and version
-- Color-coded output: user prompts in green, tool calls with `⟳ tool_name(args)`, errors in red
-- Delete confirmation rendered as a highlighted panel with numbered options
+- Color-coded output: user prompts in green, tool calls with `⟳ tool_name(args)`, MEMORY panels in orange (with `-memlog`), errors in red
+- Streaming markdown rendering for assistant replies; `[memory note: ...]` markers stripped inline before they reach the screen
 - Live log server for debug output without polluting the agent REPL
 
 ---
@@ -150,70 +189,52 @@ Delete operations (`delete_file`, `delete_dir`) are protected by a session-scope
 ```
 src/agent/
 ├── cli/
-│   ├── app.py            # Main entry point — REPL loop, project resolution, memory integration
-│   └── display.py        # Rich UI: banner, prompts, streaming, delete confirm
+│   ├── app.py            # REPL loop, project resolution, retrieval injection
+│   └── display.py        # Rich UI: banner, prompts, streaming, MEMORY panels
 ├── config/
 │   └── settings.py       # Settings dataclass, .env loading, validation
 ├── core/
-│   ├── loop.py           # ReAct agent loop (streaming + non-streaming)
-│   ├── state.py          # Conversation state — message history management
+│   ├── loop.py           # ReAct loop (consumes ConversationState transient suffix)
+│   ├── state.py          # Conversation state — message history + per-turn suffix
 │   └── compaction.py     # Context compaction
-├── memory/
-│   ├── manager.py        # MemoryManager facade — single entry point for app
-│   ├── store.py          # Local JSON file store (projects, digests, sessions, personality)
-│   ├── models.py         # Pydantic models: Personality, Project, SessionDigest, ActiveSession
-│   ├── session.py        # Session lifecycle: start, record turns, dispatch digest on exit
-│   ├── digest_worker.py  # Background subprocess: generate and save session digest
-│   ├── digest.py         # LLM digest derivation and learnings merging
-│   ├── context.py        # Assemble memory context string for system prompt
-│   ├── onboarding.py     # Project detection: scan cwd, classify with LLM, seed from similar
-│   ├── personality.py    # Personality feedback extraction and soul patching
-│   ├── commands.py       # /memory slash command handlers
-│   ├── llm.py            # LLMClient protocol + RealLLMClient + MockLLMClient
-│   ├── prompts.py        # All LLM prompt templates
-│   ├── config.py         # MemoryConfig dataclass
-│   └── tokens.py         # Token counting and truncation utilities
+├── assistant_memory/
+│   ├── manager.py        # AssistantMemoryManager — public lifecycle entry points
+│   ├── store.py          # markdown + frontmatter IO, atomic writes, glob helpers
+│   ├── schema.py         # frontmatter parse/dump, dataclasses, get_memory_dir()
+│   ├── prompts.py        # Stage-1, Stage-2, main-response, curator prompt templates
+│   ├── retrieval.py      # Two-stage retrieval pipeline
+│   └── curator.py        # extract notes, classify layer, apply writes, summarize sessions
 ├── permissions/
 │   └── gates.py          # Session-scoped delete permission tracking
-├── tools/
-│   ├── registry.py       # Tool definitions (OpenAI format) + dispatch
-│   ├── edit_common.py    # Shared: path validation, atomic writes, syntax checks
-│   ├── delete_common.py  # Shared: confirmation dialog + delete execution
-│   ├── read_file.py      # read_file tool
-│   ├── list_dir.py       # list_dir tool
-│   ├── write_file.py     # write_file tool
-│   ├── str_replace.py    # str_replace tool
-│   ├── file_rewrite.py   # file_rewrite tool
-│   ├── make_dir.py       # make_dir tool
-│   ├── delete_file.py    # delete_file tool
-│   ├── delete_dir.py     # delete_dir tool
-│   ├── check_permissions.py  # check_permissions tool
-│   └── dummy.py          # echo tool
+├── skills/               # Skill discovery + manager (Claude Code-style)
+├── tools/                # Tool implementations (read/write/edit/delete + utilities)
 ├── logger.py             # Socket-based logger (sends to log server)
 └── log_server.py         # TCP log server for live debug output
+scripts/
+└── migrate_to_assistant_memory.py  # one-shot legacy JSON → markdown migration
 ```
 
 ## Architecture
 
-The agent is built in four layers:
+The agent is built in five layers:
 
-**CLI layer** (`cli/`) — REPL entry point. Resolves the current project via memory, collects user input, drives the streaming loop, and renders output via Rich.
+**CLI layer** (`cli/`) — REPL entry point. Resolves the current project via `AssistantMemoryManager`, collects user input, runs per-turn retrieval, drives the streaming loop, and renders output via Rich.
 
-**Core layer** (`core/`) — Stateful ReAct loop. Manages conversation history in `ConversationState`, calls the OpenAI API with tool definitions, and routes tool calls back through the tool registry until the model signals it is done.
+**Core layer** (`core/`) — Stateful ReAct loop. Manages conversation history in `ConversationState`, calls the model with tool definitions, and routes tool calls back through the tool registry until the model signals it is done. `ConversationState.set_transient_system_suffix(...)` lets the memory layer inject retrieval results for one turn without persisting them.
 
-**Memory layer** (`memory/`) — Persistent context across sessions. Tracks projects by working directory, records every conversation turn, and generates session digests in a detached background process on exit. The assembled context (personality, project info, last digest, learnings) is injected into the system prompt at startup.
+**Assistant memory layer** (`assistant_memory/`) — Markdown-native memory. Two-stage LLM retrieval on the read side, a per-turn curator daemon plus on-exit consolidation + digest on the write side. Public surface preserved as `on_startup`, `on_user_turn`, `on_assistant_turn`, `on_exit`, `find_project_for_cwd`, `onboard_for_cwd`, `onboard`, `handle_command`, `retrieve_for_query`.
 
-**Tools layer** (`tools/`) — Self-contained tool implementations. Each tool returns a plain string (success message or error). The registry maps tool names to callables and wraps execution in exception handlers so errors never crash the loop.
+**Tools layer** (`tools/`) — Self-contained tool implementations.
 
-The **permissions layer** (`permissions/`) sits between the core loop and the delete tools, maintaining a session-level set of granted paths checked before any destructive operation.
+**Permissions layer** (`permissions/`) — Session-scoped delete permission tracking.
 
 ## Testing
 
 ```bash
-uv run pytest
+uv run pytest -q
 ```
 
-Tests live in `tests/`. Coverage includes the full memory subsystem (store, session lifecycle, digest generation, onboarding, personality, commands) and the delete permission system.
+Tests live in `tests/`. Coverage includes the assistant memory store, retrieval pipeline, curator, manager wiring, slash commands, the delete permission system, and the streaming display layer's `[memory note: ...]` filter.
 
 ## License
 
@@ -227,208 +248,104 @@ MIT
 
 > **Language / 语言**: [English](#cli-agent-english) | [中文](#cli-agent-中文)
 
-一个从零开始用 Python 构建的命令行智能体，实现了 ReAct（推理 + 行动）模式。这是一个交互式编程助手，可以读取文件、编辑代码、管理目录，并安全处理危险操作——全部在终端中以流式输出的方式进行。内置持久化记忆系统，可跨会话追踪项目、归纳对话摘要并积累上下文。
+一个从零开始用 Python 构建的命令行智能体，实现了 ReAct（推理 + 行动）模式。这是一个交互式编程助手，可以读取文件、编辑代码、管理目录，并安全处理危险操作——全部在终端中以流式输出的方式进行。内置 **markdown 原生的助手记忆系统**，目录结构镜像 `CLAUDE.md` 风格的人类可读笔记，每轮对话通过两阶段 LLM 选择检索相关上下文，并通过 `[memory note: ...]` 标记演化 agent 的"灵魂"。
 
 ## 环境要求
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/)（推荐）
-- OpenAI API 密钥 **或** 字节跳动 GPT API 密钥（`GPT_AK`）
+- OpenAI API 密钥、字节跳动 GPT API 密钥（`GPT_AK`），**或** DeepSeek API 密钥（`DEEPSEEK_API_KEY`）
 
-## 安装配置
-
-1. 克隆仓库并安装依赖：
+## 安装
 
 ```bash
 uv sync
 ```
 
-2. 在项目根目录创建 `.env` 文件，选择以下之一：
+在项目根目录创建 `.env`，三选一即可（自动检测优先级：DeepSeek → ByteDance → OpenAI）：
 
-**方案 A — OpenAI：**
 ```
-OPENAI_API_KEY=your-api-key-here
-```
-
-**方案 B — 字节跳动 GPT：**
-```
-GPT_AK=your-bytedance-api-key
+OPENAI_API_KEY=...
+GPT_AK=...
+DEEPSEEK_API_KEY=...
 ```
 
 可选环境变量：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `OPENAI_MODEL` | `gpt-4o-mini` | 使用的模型 |
-| `OPENAI_MAX_TOKENS` | `4096` | 最大补全 token 数 |
-| `MEMORY_DIR` | `./agent-memory` | 持久化记忆存储目录 |
+| `USE_DEEPSEEK` | auto | `true` 强制使用 DeepSeek |
+| `USE_BYTEDANCE` | auto | `true` 强制使用 ByteDance |
+| `DEEPSEEK_MODEL_PRO` | `deepseek-v4-pro` | 主回复 + 整理判断的大模型 |
+| `DEEPSEEK_MODEL_FLASH` | `deepseek-v4-flash` | 两阶段记忆检索的小模型 |
+| `ASSISTANT_MEMORY_DIR` | `~/assistant-memory` | markdown 记忆库根目录 |
 
 ## 运行
 
 ```bash
-uv run agent
+uv run agent           # 普通运行
+uv run agent -memlog   # 显示橙色 🧠 MEMORY 面板（检索/整理/摘要事件）
 ```
 
-如需实时调试日志，在启动 agent 前在另一个终端启动日志服务器：
+输入消息后按 Enter 发送。使用 `quit`、`exit` 或 Ctrl+C 退出；连按两次 Ctrl+C 强制退出（跳过 finally，中止后台 curator/digest 线程）。
 
-```bash
-uv run log-server
+## 助手记忆系统
+
+记忆库位于 `~/assistant-memory/`：
+
+```
+~/assistant-memory/
+├── _index.md                   # 顶层 manifest，启动时总是读取
+├── identity/
+│   ├── me.md                   # 用户身份
+│   └── agent.md                # agent 的灵魂；frontmatter 含 immutable_core
+├── people/<name>.md            # 每个人物一个文件
+├── preferences/<topic>.md      # 饮食、咖啡、阅读、礼物、旅行……
+├── projects/<project>.md       # frontmatter 含 cwd、status、tags
+├── context/current.md          # 本周状态 —— 永远注入
+└── log/YYYY-MM/YYYY-MM-DD.md   # 每日会话摘要
 ```
 
-输入消息后按 Enter 发送。使用 `quit`、`exit` 或 Ctrl+C 退出。
+**每轮检索（读侧）。** 模型调用之前：
+1. `_index.md` + 最近几轮对话 + 用户问题 → Stage 1 小模型挑选 scope。
+2. 选中 scope 的 manifest → Stage 2 小模型挑选最多 5 个文件。
+3. 这些文件 + `context/current.md` 作为本轮的临时 system 后缀注入，**不污染对话历史**。
 
----
+**整理器（写侧）。** 每轮助手回复后，后台守护线程运行 curator（大模型）：
+- 扫描用户消息中的事实陈述、助手回复中的 `[memory note: ...]` 标记。
+- Layer 1（静默）：明确的事实 → 直接 append 到对应文件。
+- Layer 2（确认）：模糊或矛盾事实。*（确认 UI 暂未接入，目前 Layer 2 静默跳过。）*
+- 增量更新对应 manifest 行。
 
-## 功能特性
+**退出时。** 触发整理 + 当日会话摘要（后台守护线程）。退出前最近一次 per-turn curator 会被 join 最多 2 秒，避免整理读到过期 manifest。
 
-### 流式 ReAct 循环
+**灵魂演化。** Agent 的可变"灵魂"在 `identity/agent.md` 的 body；不可变值（frontmatter `immutable_core`）每次启动都注入系统提示，不依赖检索。灵魂更新通过 `[memory note: ...]` 通道流入。
 
-Agent 使用 ReAct 模式——推理、调用工具、观察结果，循环执行直到任务完成。所有输出实时流式传输：文本 token、工具调用和工具结果在到达时立即显示。
-
-**对话流程：**
-1. 用户发送消息
-2. 模型生成推理和/或工具调用
-3. Agent 执行工具，将结果追加到对话中
-4. 模型持续运行，直到生成最终文本回复
-5. 整个会话期间保留多轮上下文
-
-### 工具列表
-
-| 工具 | 类别 | 说明 |
-|------|------|------|
-| `read_file` | 读取 | 读取文件的完整内容 |
-| `list_dir` | 读取 | 列出指定路径下的文件和目录 |
-| `write_file` | 写入 | 创建或完整覆写文件 |
-| `str_replace` | 写入 | 替换文件中的特定字符串（精准编辑） |
-| `file_rewrite` | 写入 | 用新内容覆写整个文件 |
-| `make_dir` | 写入 | 创建目录（如需要会自动创建父目录） |
-| `delete_file` | 删除 | 删除文件（需要确认或预先授权） |
-| `delete_dir` | 删除 | 递归删除目录（需要确认或预先授权） |
-| `check_permissions` | 工具 | 查询哪些路径已被授予删除权限 |
-| `echo` | 工具 | 回显消息（用于测试） |
-
-### 持久化记忆系统
-
-Agent 通过本地 JSON 存储（`agent-memory/`）在会话间保留上下文。
-
-**启动时**，Agent 检查当前目录是否为已知项目：
-- 若已识别，自动恢复项目，并将最近的会话摘要和学习内容注入系统提示。
-- 若为新目录，提示进行项目导入：扫描目录、用 LLM 分类项目（标签、能力），并从相似历史项目中继承能力。
-- 也可链接到已有项目，或跳过记忆功能。
-
-**会话中**，每条用户和助手消息都会被记录。
-
-**退出时**，后台子进程自动生成会话摘要（摘要、学习内容、能力更新），主进程无需等待即可退出。
-
-**记忆命令**（在 agent REPL 中输入）：
+**斜杠命令：**
 
 | 命令 | 说明 |
 |------|------|
-| `/memory show` | 显示当前项目上下文和最近摘要 |
-| `/memory projects` | 列出所有已追踪项目 |
-| `/memory init` | 将当前目录导入为新项目 |
-| `/memory clear learnings` | 清除当前项目的学习内容 |
-| `/memory personality show` | 显示 agent 当前的个性 |
-| `/memory personality set soul "<text>"` | 更新 agent 的灵魂 |
-| `/memory personality set core "<text>"` | 更新 agent 的不可变核心 |
+| `/memory list <scope>` | 列出 scope 内的文件 |
+| `/memory show <scope>/<file>` | 显示某个记忆文件 |
+| `/memory rebuild <scope>` | 重新生成 scope manifest |
+| `/memory current` | 显示 `context/current.md` |
 | `/memory help` | 显示所有记忆命令 |
+| `/skills` | 列出已安装的 skill |
+| `/<skill-name>` | 显式加载某个 skill |
 
-### 危险操作权限系统
+**从旧 JSON 存储迁移：**
 
-删除操作（`delete_file`、`delete_dir`）受会话级权限门控保护：
-
-1. **首次删除**某路径时，会打开交互式确认面板
-2. 用户可从三个选项中选择：
-   - **授予权限** — 批准该路径及其所有子路径在本次会话中的删除权限
-   - **仅此一次** — 仅批准本次删除操作
-   - **取消** — 中止操作
-3. 授予的权限在会话期间保留；对父路径的授权覆盖所有子路径
-
-### 安全特性
-
-- **路径校验**：所有写入和编辑操作限制在当前工作目录内。
-- **原子写入**：文件写入先写入临时文件，再原子性重命名——失败时不会产生残缺文件。
-- **语法检查**：编辑 Python 或 JSON 文件后，agent 会验证语法并显示警告。
-- **非 TTY 安全**：当 stdin 不是终端时，删除确认默认为"取消"。
-
-### 丰富的终端 UI
-
-- 带有项目名称和版本的启动横幅
-- 颜色编码输出：用户提示为绿色，工具调用显示为 `⟳ tool_name(args)`，错误显示为红色
-- 删除确认以带编号选项的高亮面板呈现
-- 实时日志服务器，调试输出不污染 agent REPL
-
----
-
-## 项目结构
-
-```
-src/agent/
-├── cli/
-│   ├── app.py            # 主入口 — REPL 循环、项目解析、记忆集成
-│   └── display.py        # Rich UI：横幅、提示、流式输出、删除确认
-├── config/
-│   └── settings.py       # 配置数据类，.env 加载与校验
-├── core/
-│   ├── loop.py           # ReAct agent 循环（流式与非流式）
-│   ├── state.py          # 对话状态 — 消息历史管理
-│   └── compaction.py     # 上下文压缩
-├── memory/
-│   ├── manager.py        # MemoryManager 门面 — app 的单一入口
-│   ├── store.py          # 本地 JSON 文件存储（项目、摘要、会话、个性）
-│   ├── models.py         # Pydantic 模型：Personality、Project、SessionDigest、ActiveSession
-│   ├── session.py        # 会话生命周期：开始、记录轮次、退出时分发摘要
-│   ├── digest_worker.py  # 后台子进程：生成并保存会话摘要
-│   ├── digest.py         # LLM 摘要推导与学习内容合并
-│   ├── context.py        # 组装记忆上下文字符串注入系统提示
-│   ├── onboarding.py     # 项目检测：扫描目录、LLM 分类、从相似项目继承
-│   ├── personality.py    # 个性反馈提取与灵魂更新
-│   ├── commands.py       # /memory 斜杠命令处理
-│   ├── llm.py            # LLMClient 协议 + RealLLMClient + MockLLMClient
-│   ├── prompts.py        # 所有 LLM 提示模板
-│   ├── config.py         # MemoryConfig 数据类
-│   └── tokens.py         # Token 计数与截断工具
-├── permissions/
-│   └── gates.py          # 会话级删除权限追踪
-├── tools/
-│   ├── registry.py       # 工具定义（OpenAI 格式）+ 分发
-│   ├── edit_common.py    # 共享：路径校验、原子写入、语法检查
-│   ├── delete_common.py  # 共享：确认对话框 + 删除执行
-│   ├── read_file.py      # read_file 工具
-│   ├── list_dir.py       # list_dir 工具
-│   ├── write_file.py     # write_file 工具
-│   ├── str_replace.py    # str_replace 工具
-│   ├── file_rewrite.py   # file_rewrite 工具
-│   ├── make_dir.py       # make_dir 工具
-│   ├── delete_file.py    # delete_file 工具
-│   ├── delete_dir.py     # delete_dir 工具
-│   ├── check_permissions.py  # check_permissions 工具
-│   └── dummy.py          # echo 工具
-├── logger.py             # 基于 Socket 的日志器（发送至日志服务器）
-└── log_server.py         # TCP 日志服务器，用于实时调试输出
+```bash
+uv run python -m scripts.migrate_to_assistant_memory
 ```
 
-## 架构
-
-Agent 分四层构建：
-
-**CLI 层**（`cli/`）— REPL 入口。通过记忆系统解析当前项目，收集用户输入，驱动流式循环，并通过 Rich 渲染输出。
-
-**核心层**（`core/`）— 有状态的 ReAct 循环。在 `ConversationState` 中管理对话历史，使用工具定义调用 OpenAI API，并将工具调用路由回工具注册表，直到模型发出完成信号。
-
-**记忆层**（`memory/`）— 跨会话的持久化上下文。按工作目录追踪项目，记录每条对话轮次，并在退出时通过独立后台进程生成会话摘要。启动时将组装好的上下文（个性、项目信息、最近摘要、学习内容）注入系统提示。
-
-**工具层**（`tools/`）— 独立的工具实现。每个工具返回纯字符串（成功消息或错误）。注册表将工具名称映射到可调用对象，并用异常处理器包裹执行，确保错误不会导致循环崩溃。
-
-**权限层**（`permissions/`）位于核心循环与删除工具之间，维护一个会话级已授权路径集合，在任何危险操作前进行检查。
+把 `personality.json` 转换为 `identity/agent.md`，把 projects + digests 转换为 markdown，并将旧目录重命名为 `agent-memory.legacy/`。
 
 ## 测试
 
 ```bash
-uv run pytest
+uv run pytest -q
 ```
-
-测试文件位于 `tests/` 目录。覆盖完整的记忆子系统（存储、会话生命周期、摘要生成、项目导入、个性、命令）以及删除权限系统。
 
 ## 许可证
 

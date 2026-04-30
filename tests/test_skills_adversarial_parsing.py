@@ -440,7 +440,7 @@ def test_skill_at_depth_4_included(tmp_path, isolated_home):
     # cwd/.claude/skills/ is the scan root (depth 0)
     # Then skills at deeper levels:
     # skills/a/b/c/d/SKILL.md → walked at depth 1,2,3,4 (entry == "d" found at depth 4)
-    base = tmp_path / ".claude" / "skills"
+    base = tmp_path / ".agents" / "skills"
     nested = base / "a" / "b" / "c" / "d"
     nested.mkdir(parents=True)
     (nested / "SKILL.md").write_text(_valid_md("d"), encoding="utf-8")
@@ -452,7 +452,7 @@ def test_skill_at_depth_4_included(tmp_path, isolated_home):
 def test_skill_at_depth_5_excluded(tmp_path, isolated_home):
     """_MAX_DEPTH is enforced consistently: nesting beyond 4 levels under the
     scan root is not discovered."""
-    base = tmp_path / ".claude" / "skills"
+    base = tmp_path / ".agents" / "skills"
     nested = base / "a" / "b" / "c" / "d" / "e"
     nested.mkdir(parents=True)
     (nested / "SKILL.md").write_text(_valid_md("e"), encoding="utf-8")
@@ -463,11 +463,11 @@ def test_skill_at_depth_5_excluded(tmp_path, isolated_home):
 
 def test_collision_first_found_wins_logs_shadow(tmp_path, isolated_home, caplog):
     # Project-scope (.claude) is checked first; user-scope second.
-    project_dir = tmp_path / ".claude" / "skills" / "dup"
+    project_dir = tmp_path / ".agents" / "skills" / "dup"
     project_dir.mkdir(parents=True)
     (project_dir / "SKILL.md").write_text(_valid_md("dup"), encoding="utf-8")
 
-    user_dir = isolated_home / ".claude" / "skills" / "dup"
+    user_dir = isolated_home / ".agents" / "skills" / "dup"
     user_dir.mkdir(parents=True)
     (user_dir / "SKILL.md").write_text(_valid_md("dup"), encoding="utf-8")
 
@@ -485,7 +485,7 @@ def test_unreadable_subdir_swallowed(tmp_path, isolated_home):
     PermissionError from is_dir/is_file is caught per-entry."""
     if os.geteuid() == 0:
         pytest.skip("running as root, chmod 0o000 has no effect")
-    base = tmp_path / ".claude" / "skills"
+    base = tmp_path / ".agents" / "skills"
     base.mkdir(parents=True)
     good = base / "good"
     good.mkdir()
@@ -502,7 +502,7 @@ def test_unreadable_subdir_swallowed(tmp_path, isolated_home):
 
 
 def test_symlink_loop_does_not_hang(tmp_path, isolated_home):
-    base = tmp_path / ".claude" / "skills"
+    base = tmp_path / ".agents" / "skills"
     base.mkdir(parents=True)
     real = base / "real"
     real.mkdir()
@@ -521,14 +521,14 @@ def test_symlink_loop_does_not_hang(tmp_path, isolated_home):
 
 
 def test_empty_skills_directory(tmp_path, isolated_home):
-    base = tmp_path / ".claude" / "skills"
+    base = tmp_path / ".agents" / "skills"
     base.mkdir(parents=True)
     skills = discover_skills(tmp_path)
     assert skills == {}
 
 
 def test_parent_dir_with_spaces_and_unicode(tmp_path, isolated_home):
-    base = tmp_path / ".claude" / "skills"
+    base = tmp_path / ".agents" / "skills"
     base.mkdir(parents=True)
     weird = base / "skill with spaces 中文 🚀"
     weird.mkdir()
@@ -546,7 +546,7 @@ def test_parent_dir_with_spaces_and_unicode(tmp_path, isolated_home):
 
 def test_skip_dirs_not_traversed(tmp_path, isolated_home):
     """SKILL.md inside a SKIP_DIRS-named directory should be ignored."""
-    base = tmp_path / ".claude" / "skills"
+    base = tmp_path / ".agents" / "skills"
     base.mkdir(parents=True)
 
     # Create a node_modules folder containing a skill — it should be skipped

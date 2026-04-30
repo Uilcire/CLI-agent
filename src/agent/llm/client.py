@@ -20,4 +20,6 @@ def create_client(settings: Settings):
             api_version=settings.gpt_api_version,
             azure_endpoint=endpoint,
         )
+    if settings.backend == "deepseek":
+        return OpenAI(api_key=settings.api_key, base_url=settings.base_url)
     return OpenAI(api_key=settings.api_key)

@@ -231,6 +231,13 @@ class TestParseSkillFile:
 # ---------------------------------------------------------------------------
 
 class TestDiscoverSkills:
+    @pytest.fixture(autouse=True)
+    def _isolate_home(self, tmp_path, monkeypatch):
+        """Point Path.home() at a clean temp dir so tests don't see real ~/.agents/."""
+        clean_home = tmp_path / "_home"
+        clean_home.mkdir()
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: clean_home))
+
     def _make_skills_root(self, tmp_path: Path) -> Path:
         project = tmp_path / "project"
         project.mkdir()
@@ -238,23 +245,24 @@ class TestDiscoverSkills:
 
     def test_single_project_skill(self, tmp_path):
         project = self._make_skills_root(tmp_path)
-        skills_dir = project / ".claude" / "skills"
+        skills_dir = project / ".agents" / "skills"
         make_skill_dir(skills_dir, "pdf-processing", VALID_SKILL_MD)
 
         result = discover_skills(project)
 
         assert "pdf-processing" in result
         assert result["pdf-processing"].scope == "project"
+        assert result["pdf-processing"].source == "agents"
 
     def test_project_scope_beats_user_scope(self, tmp_path, monkeypatch):
         project = self._make_skills_root(tmp_path)
 
-        project_skills = project / ".claude" / "skills"
+        project_skills = project / ".agents" / "skills"
         make_skill_dir(project_skills, "pdf-processing", VALID_SKILL_MD)
 
         user_home = tmp_path / "home"
         user_home.mkdir()
-        user_skills = user_home / ".claude" / "skills"
+        user_skills = user_home / ".agents" / "skills"
         user_content = VALID_SKILL_MD.replace(
             "extract PDF text", "User-level PDF skill text"
         )
@@ -267,7 +275,7 @@ class TestDiscoverSkills:
 
     def test_skips_git_and_node_modules(self, tmp_path):
         project = self._make_skills_root(tmp_path)
-        skills_root = project / ".claude" / "skills"
+        skills_root = project / ".agents" / "skills"
         skills_root.mkdir(parents=True)
 
         for skip_dir in [".git", "node_modules", "__pycache__"]:
@@ -285,7 +293,7 @@ class TestDiscoverSkills:
 
     def test_multiple_skills_discovered(self, tmp_path):
         project = self._make_skills_root(tmp_path)
-        skills_dir = project / ".claude" / "skills"
+        skills_dir = project / ".agents" / "skills"
 
         content_b = (
             "---\nname: data-analysis\n"
@@ -298,6 +306,65 @@ class TestDiscoverSkills:
         result = discover_skills(project)
         assert "pdf-processing" in result
         assert "data-analysis" in result
+
+    def test_claude_source_included_by_default(self, tmp_path, monkeypatch):
+        """By default (AGENT_SKILL_SOURCES unset), both .agents/ and .claude/ are scanned."""
+        monkeypatch.delenv("AGENT_SKILL_SOURCES", raising=False)
+        project = self._make_skills_root(tmp_path)
+        claude_content = VALID_SKILL_MD.replace(
+            "name: pdf-processing", "name: claude-only"
+        )
+        make_skill_dir(project / ".claude" / "skills", "claude-only", claude_content)
+
+        result = discover_skills(project)
+        assert "claude-only" in result
+        assert result["claude-only"].source == "claude"
+
+    def test_agents_only_when_explicit(self, tmp_path, monkeypatch):
+        """AGENT_SKILL_SOURCES=agents excludes .claude/skills/ — strict mode."""
+        monkeypatch.setenv("AGENT_SKILL_SOURCES", "agents")
+        project = self._make_skills_root(tmp_path)
+        claude_content = VALID_SKILL_MD.replace(
+            "name: pdf-processing", "name: claude-only"
+        )
+        make_skill_dir(project / ".claude" / "skills", "claude-only", claude_content)
+
+        result = discover_skills(project)
+        assert result == {}
+
+    def test_claude_source_included_when_enabled(self, tmp_path, monkeypatch):
+        """AGENT_SKILL_SOURCES=agents,claude includes .claude/skills/ and stamps source."""
+        monkeypatch.setenv("AGENT_SKILL_SOURCES", "agents,claude")
+        project = self._make_skills_root(tmp_path)
+        claude_content = VALID_SKILL_MD.replace(
+            "name: pdf-processing", "name: claude-tool"
+        )
+        agents_content = VALID_SKILL_MD.replace(
+            "name: pdf-processing", "name: agents-tool"
+        )
+        make_skill_dir(project / ".claude" / "skills", "claude-tool", claude_content)
+        make_skill_dir(project / ".agents" / "skills", "agents-tool", agents_content)
+
+        result = discover_skills(project)
+        assert result["claude-tool"].source == "claude"
+        assert result["agents-tool"].source == "agents"
+
+    def test_claude_only_source(self, tmp_path, monkeypatch):
+        """AGENT_SKILL_SOURCES=claude excludes .agents/."""
+        monkeypatch.setenv("AGENT_SKILL_SOURCES", "claude")
+        project = self._make_skills_root(tmp_path)
+        claude_content = VALID_SKILL_MD.replace(
+            "name: pdf-processing", "name: claude-tool"
+        )
+        agents_content = VALID_SKILL_MD.replace(
+            "name: pdf-processing", "name: agents-tool"
+        )
+        make_skill_dir(project / ".claude" / "skills", "claude-tool", claude_content)
+        make_skill_dir(project / ".agents" / "skills", "agents-tool", agents_content)
+
+        result = discover_skills(project)
+        assert "claude-tool" in result
+        assert "agents-tool" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -368,6 +435,22 @@ class TestSkillManager:
         xml = mgr.catalog_xml()
         assert "<available_skills>" in xml
         assert "<skill>" not in xml
+        assert '<skill source=' not in xml
+
+    def test_catalog_xml_includes_source_attribute(self, tmp_path):
+        """Each <skill> tag carries source="agents|claude" for soft separation."""
+        record = self._make_record(tmp_path)
+        record.source = "claude"
+        mgr = SkillManager({record.name: record})
+        xml = mgr.catalog_xml()
+        assert '<skill source="claude">' in xml
+
+    def test_catalog_xml_default_source_agents(self, tmp_path):
+        record = self._make_record(tmp_path)
+        # Default source value is "agents" per SkillRecord dataclass.
+        mgr = SkillManager({record.name: record})
+        xml = mgr.catalog_xml()
+        assert '<skill source="agents">' in xml
 
     def test_names_returns_all_skill_names(self, tmp_path):
         record = self._make_record(tmp_path)

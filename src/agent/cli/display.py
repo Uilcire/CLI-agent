@@ -1,12 +1,17 @@
 """Display layer: pretty-print assistant output using Rich."""
 
+import queue
+import re
+import threading
 from typing import Literal
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.box import ROUNDED
+from rich.box import ROUNDED, HEAVY
 from rich.markup import escape
+from rich.markdown import Markdown
 from rich.prompt import Prompt
+from rich.live import Live
 from rich.text import Text
 
 # Neon blue hex
@@ -15,44 +20,227 @@ DeleteChoice = Literal["delete_grant", "delete_no_grant", "cancel"]
 # Prompt: "You:" in bold green
 PROMPT_STYLE = "bold light_green"
 
+# Tool call / result box styles
+TOOL_CALL_BORDER = "#8B5CF6"  # purple-violet
+TOOL_RESULT_BORDER = "#6B7280"  # dim gray
+MEM_BORDER = "#FB923C"  # orange — memory events
+
+
+def _has_markdown(text: str) -> bool:
+    """Quick check if text contains markdown formatting characters."""
+    import re
+    pattern = (
+        r'(\*\*|__|`|~~|'              # bold / code / strikethrough
+        r'(?<!\w)\*[^*\s][^*]*\*(?!\w)|'  # *italic*
+        r'(?<!\w)_[^_\s][^_]*_(?!\w)|'    # _italic_
+        r'^#{1,6}\s|'                    # headers
+        r'^[-*+]\s|^\d+\.\s|^>|'         # lists / blockquote
+        r'^\s*[-*_]{3,}\s*$|'            # hr
+        r'\|.*\|.*\||'                   # table row
+        r'\[[^\]]+\]\([^)]+\))'          # [text](url)
+    )
+    return bool(re.search(pattern, text, re.MULTILINE))
+
+
+def _balance_fences(text: str) -> str:
+    """If text has an odd number of ``` fences (mid-stream), append a closing
+    fence so the in-progress Markdown render doesn't swallow trailing prose."""
+    if text.count("```") % 2 == 1:
+        return text + "\n```"
+    return text
+
+
+_MEMORY_NOTE_INLINE_RE = re.compile(r"\[memory note:[^\]]*\]", re.IGNORECASE | re.DOTALL)
+# Lower-case, prefix is what we watch for while bytes drip in.
+_MEMNOTE_PREFIX = "[memory note:"
+
+
+class _MemNoteFilter:
+    """Strip ``[memory note: ...]`` markers from a stream of deltas.
+
+    State machine:
+    - normal: emit chars; on encountering ``[``, hold it.
+    - holding: accumulate chars; if accumulated string is no longer a prefix
+      of ``[memory note:``, flush it. If we reach the full marker prefix,
+      switch to swallowing until ``]``.
+    - swallowing: drop chars until we see ``]``; then back to normal.
+    """
+
+    def __init__(self) -> None:
+        self._held: str = ""
+        self._swallowing: bool = False
+
+    def feed(self, delta: str) -> str:
+        out: list[str] = []
+        for ch in delta:
+            if self._swallowing:
+                if ch == "]":
+                    self._swallowing = False
+                continue
+            if self._held:
+                self._held += ch
+                lowered = self._held.lower()
+                if lowered.startswith(_MEMNOTE_PREFIX):
+                    # Found the full prefix; switch to swallow mode.
+                    self._held = ""
+                    self._swallowing = True
+                    continue
+                if not _MEMNOTE_PREFIX.startswith(lowered):
+                    # No longer a possible prefix — flush, reset.
+                    out.append(self._held)
+                    self._held = ""
+                continue
+            if ch == "[":
+                self._held = ch
+                continue
+            out.append(ch)
+        return "".join(out)
+
+    def flush(self) -> str:
+        held, self._held = self._held, ""
+        if self._swallowing:
+            # Unterminated marker — drop it.
+            self._swallowing = False
+            return ""
+        return held
+
+
+# ---- Memory-event panel queueing (deferred while Rich Live is active) ------
+
+_mem_event_queue: "queue.Queue[str]" = queue.Queue()
+_live_active_lock = threading.Lock()
+_live_active: bool = False
+_memlog_enabled: bool = False
+
+
+def set_memlog_enabled(enabled: bool) -> None:
+    global _memlog_enabled
+    _memlog_enabled = bool(enabled)
+
+
+def mem_live_active(active: bool) -> None:
+    """Toggle the Live-active flag from ``stream_assistant``."""
+    global _live_active
+    with _live_active_lock:
+        _live_active = bool(active)
+
+
+def drain_mem_events() -> None:
+    """Render any deferred memory panels. Call from main thread after Live ends."""
+    while True:
+        try:
+            msg = _mem_event_queue.get_nowait()
+        except queue.Empty:
+            return
+        _render_mem_panel(msg)
+
 
 def stream_assistant(events) -> str:
     """
-    Consume streaming events and print each piece as it arrives.
-    Content accumulates and scrolls naturally (no overwriting).
+    Consume streaming events, render content through Rich Markdown
+    for readable terminal output. Switches to raw mode during/after
+    tool calls since Markdown rendering can't overlay tool output cleanly.
     Returns the final assistant text.
     """
     console = Console()
     content_parts: list[str] = []
     final_text = ""
-    in_content_block = False
+    tool_mode = False
+    note_filter = _MemNoteFilter()
 
     w = console.width
     sep = "-" * max(0, w - len("Assistant: "))
     console.print(f"[bold {NEON_BLUE}]\nAssistant:[/bold {NEON_BLUE}]")
     console.print(sep, style="dim")
 
-    for event_type, data in events:
-        if event_type == "content_delta":
-            if not in_content_block:
-                console.print(Text.from_markup("[dim]thinking[/dim]"))
-                in_content_block = True
-            content_parts.append(data["delta"])
-            console.print(data["delta"], end="")
-        elif event_type == "tool_call":
-            if in_content_block:
-                console.print()
-                in_content_block = False
-            name, args = data["name"], data["args"]
-            args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
-            console.print(Text.from_markup(f"⟳ [bold cyan]{escape(str(name))}[/bold cyan]({escape(args_str)})"))
-        elif event_type == "tool_result":
-            in_content_block = False
-        elif event_type == "done":
-            final_text = data.get("text", "")
-            if in_content_block:
-                console.print()
-            break
+    # Live display for in-progress markdown rendering
+    live = Live(
+        Markdown("", code_theme="monokai"),
+        console=console,
+        refresh_per_second=10,
+        transient=False,
+        vertical_overflow="visible",
+    )
+
+    try:
+        for event_type, data in events:
+            if event_type == "content_delta":
+                if tool_mode:
+                    # Resume markdown rendering for the new post-tool segment
+                    tool_mode = False
+                    content_parts = []
+                visible = note_filter.feed(data["delta"])
+                if not visible:
+                    continue
+                content_parts.append(visible)
+                accum = "".join(content_parts)
+                if not live.is_started:
+                    live.start()
+                    mem_live_active(True)
+                live.update(Markdown(_balance_fences(accum), code_theme="monokai"))
+
+            elif event_type == "tool_call":
+                # Pause markdown rendering — tool output can't overlay a Live region
+                if not tool_mode:
+                    if live.is_started:
+                        live.stop()
+                        mem_live_active(False)
+                        drain_mem_events()
+                    tool_mode = True
+                    if content_parts:
+                        console.print()  # newline after rendered markdown
+                name, args = data["name"], data["args"]
+                args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
+                tool_call_markup = (
+                    f"[bold bright_white]⟳ {escape(str(name))}[/bold bright_white]\n"
+                    f"[dim]{escape(args_str)}[/dim]"
+                )
+                console.print(
+                    Panel(
+                        tool_call_markup,
+                        title="[bold]🔧 TOOL CALL[/bold]",
+                        border_style=TOOL_CALL_BORDER,
+                        box=HEAVY,
+                        padding=(0, 1),
+                    )
+                )
+
+            elif event_type == "tool_result":
+                name, result = data["name"], data["result"]
+                result_preview = result[:300] + ("..." if len(result) > 300 else "")
+                tool_result_markup = (
+                    f"[bold bright_white]{escape(str(name))}[/bold bright_white]\n"
+                    f"[dim italic]{escape(result_preview)}[/dim italic]"
+                )
+                console.print(
+                    Panel(
+                        tool_result_markup,
+                        title="[bold]📤 RESULT[/bold]",
+                        border_style=TOOL_RESULT_BORDER,
+                        box=ROUNDED,
+                        padding=(0, 1),
+                    )
+                )
+
+            elif event_type == "done":
+                # final_text is the full turn text (used as return value).
+                # Do NOT re-render it into the current Live region — that region
+                # only owns the post-last-tool segment, and content_delta already
+                # streamed it. Re-rendering full text would duplicate pre-tool prose.
+                final_text = data.get("text", "")
+                break
+    finally:
+        # Flush any remaining buffered char (e.g. dangling "[" not part of a marker).
+        tail = note_filter.flush()
+        if tail and live.is_started:
+            content_parts.append(tail)
+            live.update(Markdown(_balance_fences("".join(content_parts)), code_theme="monokai"))
+        if live.is_started:
+            live.stop()
+        mem_live_active(False)
+        if tool_mode:
+            console.print()  # flush raw output
+        drain_mem_events()
 
     return final_text
 
@@ -70,7 +258,7 @@ def print_banner() -> None:
 
 
 def print_assistant(text: str) -> None:
-    """Print the assistant's reply. Same format as "You:" — label plus text."""
+    """Print assistant reply, rendering markdown for terminal readability."""
     console = Console()
     if not text or not text.strip():
         return
@@ -78,7 +266,11 @@ def print_assistant(text: str) -> None:
     sep = "-" * max(0, w - len("Assistant: "))
     console.print(f"[bold {NEON_BLUE}]\nAssistant:[/bold {NEON_BLUE}]")
     console.print(f"{sep}\n", style="dim")
-    console.print(text)
+    if _has_markdown(text):
+        md = Markdown(text, code_theme="monokai")
+        console.print(md)
+    else:
+        console.print(text)
 
 
 def prompt_user() -> str:
@@ -119,3 +311,34 @@ def confirm_delete(path: str) -> DeleteChoice:
         default="3",
     )
     return {"1": "delete_grant", "2": "delete_no_grant", "3": "cancel"}[choice]
+
+
+_mem_console = Console()
+
+
+def _render_mem_panel(message: str) -> None:
+    _mem_console.print(
+        Panel(
+            f"[bold bright_white]🧠 {escape(message)}[/bold bright_white]",
+            title="[bold]MEMORY[/bold]",
+            border_style=MEM_BORDER,
+            box=HEAVY,
+            padding=(0, 1),
+        )
+    )
+
+
+def print_mem_event(message: str) -> None:
+    """Render a memory event as an orange-bordered panel.
+
+    If a Rich ``Live`` region is currently active (assistant streaming), defer
+    the panel to a queue and let ``stream_assistant`` drain it after Live ends.
+    """
+    if not _memlog_enabled:
+        return
+    with _live_active_lock:
+        active = _live_active
+    if active:
+        _mem_event_queue.put(message)
+        return
+    _render_mem_panel(message)

@@ -1,5 +1,6 @@
 """Filesystem scanner: discover SKILL.md files across known scope directories."""
 
+import os
 from pathlib import Path
 
 from agent.logger import get_logger
@@ -11,21 +12,35 @@ log = get_logger(__name__)
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", ".agents", ".claude"}
 _MAX_DEPTH = 4
 
+# Default skill source pool. The agent borrows the host's Claude Code skill
+# library by default — convenient — and relies on AGENT.md to keep identity
+# distinct from the tools. Override with AGENT_SKILL_SOURCES=agents to lock
+# it down to project/.agents only.
+_DEFAULT_SOURCES = "agents,claude"
 
-def get_scan_dirs(cwd: Path) -> list[tuple[Path, str]]:
+
+def _enabled_sources() -> set[str]:
+    """Parse AGENT_SKILL_SOURCES env var into a set of source names."""
+    raw = os.environ.get("AGENT_SKILL_SOURCES") or _DEFAULT_SOURCES
+    return {s.strip().lower() for s in raw.split(",") if s.strip()}
+
+
+def get_scan_dirs(cwd: Path) -> list[tuple[Path, str, str]]:
     """
-    Return (directory, scope) pairs in priority order (highest priority first).
+    Return (directory, scope, source) triples in priority order.
 
     Project-level skills override user-level skills on name collision.
-    Within each scope, .claude is checked before .agents.
+    Within each scope, .agents/ is checked before .claude/.
+    Source pools are gated by AGENT_SKILL_SOURCES (default: agents only).
     """
-    candidates: list[tuple[Path, str]] = [
-        (cwd / ".claude" / "skills", "project"),
-        (cwd / ".agents" / "skills", "project"),
-        (Path.home() / ".claude" / "skills", "user"),
-        (Path.home() / ".agents" / "skills", "user"),
+    sources = _enabled_sources()
+    pool: list[tuple[Path, str, str]] = [
+        (cwd / ".agents" / "skills", "project", "agents"),
+        (cwd / ".claude" / "skills", "project", "claude"),
+        (Path.home() / ".agents" / "skills", "user", "agents"),
+        (Path.home() / ".claude" / "skills", "user", "claude"),
     ]
-    return [(d, scope) for d, scope in candidates if d.is_dir()]
+    return [(d, scope, src) for d, scope, src in pool if src in sources and d.is_dir()]
 
 
 def _walk_skill_dirs(root: Path, depth: int = 0):
@@ -59,7 +74,7 @@ def discover_skills(cwd: Path) -> dict[str, SkillRecord]:
     skills: dict[str, SkillRecord] = {}
     seen_paths: set[Path] = set()
 
-    for scan_dir, scope in get_scan_dirs(cwd):
+    for scan_dir, scope, source in get_scan_dirs(cwd):
         for skill_path in _walk_skill_dirs(scan_dir):
             try:
                 resolved = skill_path.resolve()
@@ -71,6 +86,7 @@ def discover_skills(cwd: Path) -> dict[str, SkillRecord]:
             record = parse_skill_file(skill_path, scope=scope)
             if record is None:
                 continue
+            record.source = source
             if record.name in skills:
                 existing = skills[record.name]
                 log.warning(

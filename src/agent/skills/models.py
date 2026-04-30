@@ -15,3 +15,4 @@ class SkillRecord:
     body: str               # markdown body with YAML frontmatter stripped
     scope: Literal["project", "user"]
     allowed_tools: list[str] = field(default_factory=list)
+    source: str = "agents"  # which source pool this skill came from: "agents" | "claude" | future

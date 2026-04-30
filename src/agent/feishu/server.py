@@ -27,7 +27,7 @@ from lark_oapi.event.dispatcher_handler import (
 )
 
 from agent.config.settings import load_settings
-from agent.core.loop import run_streaming
+from agent.core.loop import DEFAULT_SYSTEM_PROMPT, run_streaming
 from agent.core.state import ConversationState
 from agent.feishu.client import FeishuClient
 
@@ -38,17 +38,18 @@ _sessions: dict[str, ConversationState] = {}
 _session_locks: dict[str, threading.Lock] = {}
 _global_lock = threading.Lock()
 
+FEISHU_PREAMBLE = (
+    "You are a helpful assistant talking to a user via Feishu (Lark) chat. "
+    "Keep your replies concise and friendly. "
+    "Do not use heavy Markdown — Feishu text messages render plain text."
+)
+FEISHU_SYSTEM_PROMPT = f"{FEISHU_PREAMBLE}\n\n{DEFAULT_SYSTEM_PROMPT}"
+
 
 def _get_session(open_id: str) -> tuple[ConversationState, threading.Lock]:
     with _global_lock:
         if open_id not in _sessions:
-            _sessions[open_id] = ConversationState(
-                system_prompt=(
-                    "You are a helpful assistant talking to a user via Feishu (Lark) chat. "
-                    "Keep your replies concise and friendly. "
-                    "Do not use heavy Markdown — Feishu text messages render plain text."
-                )
-            )
+            _sessions[open_id] = ConversationState(system_prompt=FEISHU_SYSTEM_PROMPT)
             _session_locks[open_id] = threading.Lock()
         return _sessions[open_id], _session_locks[open_id]
 
@@ -108,6 +109,8 @@ def main() -> None:
         .register_p2_im_message_receive_v1(on_message)
         .register_p2_im_chat_access_event_bot_p2p_chat_entered_v1(lambda _: None)
         .register_p2_im_message_message_read_v1(lambda _: None)
+        .register_p2_im_message_reaction_created_v1(lambda _: None)
+        .register_p2_im_message_reaction_deleted_v1(lambda _: None)
         .build()
     )
 

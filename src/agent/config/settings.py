@@ -10,21 +10,25 @@ from dotenv import load_dotenv
 @dataclass(frozen=True)
 class Settings:
     """
-    Holds API config for OpenAI or ByteDance GPT.
+    Holds API config for OpenAI, ByteDance GPT, or DeepSeek.
 
-    - backend: "openai" or "bytedance" (chosen by env: GPT_AK → bytedance)
+    - backend: "openai" | "bytedance" | "deepseek"
     - api_key: key for the chosen backend
     - model: model name
     - max_tokens: max completion tokens
     - For ByteDance: gpt_endpoint, gpt_api_version (optional overrides)
+    - For DeepSeek: base_url (OpenAI-compatible endpoint)
     """
 
-    backend: Literal["openai", "bytedance"]
+    backend: Literal["openai", "bytedance", "deepseek"]
     api_key: str
     model: str
     max_tokens: int
     gpt_endpoint: str = ""
     gpt_api_version: str = "2024-02-01"
+    base_url: str = ""
+    model_pro: str = ""
+    model_flash: str = ""
 
 
 def _parse_bool(value: str) -> bool | None:
@@ -53,29 +57,55 @@ def load_settings() -> Settings:
 
     gpt_ak = (os.environ.get("GPT_AK") or "").strip()
     openai_key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    deepseek_key = (os.environ.get("DEEPSEEK_API_KEY") or "").strip()
     use_bytedance_raw = os.environ.get("USE_BYTEDANCE")
     use_bytedance = _parse_bool(use_bytedance_raw) if use_bytedance_raw else None
+    use_deepseek_raw = os.environ.get("USE_DEEPSEEK")
+    use_deepseek = _parse_bool(use_deepseek_raw) if use_deepseek_raw else None
 
-    # Determine backend: manual override or auto-detect
-    if use_bytedance is True:
+    # Determine backend: manual override or auto-detect.
+    # Auto-detect priority: DeepSeek (default) → ByteDance → OpenAI.
+    backend: Literal["openai", "bytedance", "deepseek"]
+    if use_deepseek is True:
+        if not deepseek_key:
+            raise ValueError("USE_DEEPSEEK=true but DEEPSEEK_API_KEY is not set.")
+        backend = "deepseek"
+    elif use_bytedance is True:
         if not gpt_ak:
             raise ValueError("USE_BYTEDANCE=true but GPT_AK is not set.")
-        backend: Literal["openai", "bytedance"] = "bytedance"
-    elif use_bytedance is False:
-        if not openai_key:
-            raise ValueError("USE_BYTEDANCE=false but OPENAI_API_KEY is not set.")
-        backend = "openai"
+        backend = "bytedance"
+    elif use_bytedance is False and use_deepseek is not False:
+        if deepseek_key:
+            backend = "deepseek"
+        elif openai_key:
+            backend = "openai"
+        else:
+            raise ValueError(
+                "USE_BYTEDANCE=false but no DEEPSEEK_API_KEY or OPENAI_API_KEY set."
+            )
+    elif use_deepseek is False:
+        if gpt_ak:
+            backend = "bytedance"
+        elif openai_key:
+            backend = "openai"
+        else:
+            raise ValueError(
+                "USE_DEEPSEEK=false but no GPT_AK or OPENAI_API_KEY set."
+            )
+    elif deepseek_key:
+        backend = "deepseek"
     elif gpt_ak:
         backend = "bytedance"
     elif openai_key:
         backend = "openai"
     else:
         raise ValueError(
-            "No API key configured. Set either GPT_AK (ByteDance) or "
-            "OPENAI_API_KEY (OpenAI) in .env or environment."
+            "No API key configured. Set DEEPSEEK_API_KEY (DeepSeek), "
+            "GPT_AK (ByteDance), or OPENAI_API_KEY (OpenAI) in .env."
         )
 
     # Set credentials and config for the chosen backend
+    base_url = ""
     if backend == "bytedance":
         api_key = gpt_ak
         model = (
@@ -90,11 +120,27 @@ def load_settings() -> Settings:
         gpt_api_version = (
             os.environ.get("GPT_API_VERSION") or "2024-02-01"
         ).strip()
-    else:
-        api_key = openai_key
-        model = (os.environ.get("OPENAI_MODEL") or "gpt-4o--mini").strip()
+    elif backend == "deepseek":
+        api_key = deepseek_key
+        model = (os.environ.get("DEEPSEEK_MODEL") or "deepseek-v4-pro").strip()
+        base_url = (
+            os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+        ).strip()
         gpt_endpoint = ""
         gpt_api_version = "2024-02-01"
+        model_pro = (os.environ.get("DEEPSEEK_MODEL_PRO") or "deepseek-v4-pro").strip()
+        model_flash = (
+            os.environ.get("DEEPSEEK_MODEL_FLASH") or "deepseek-v4-flash"
+        ).strip()
+    else:
+        api_key = openai_key
+        model = (os.environ.get("OPENAI_MODEL") or "gpt-4o-mini").strip()
+        gpt_endpoint = ""
+        gpt_api_version = "2024-02-01"
+
+    if backend != "deepseek":
+        model_pro = ""
+        model_flash = ""
 
     max_tokens_str = (os.environ.get("OPENAI_MAX_TOKENS") or "4096").strip()
     try:
@@ -109,4 +155,7 @@ def load_settings() -> Settings:
         max_tokens=max_tokens,
         gpt_endpoint=gpt_endpoint,
         gpt_api_version=gpt_api_version,
+        base_url=base_url,
+        model_pro=model_pro,
+        model_flash=model_flash,
     )

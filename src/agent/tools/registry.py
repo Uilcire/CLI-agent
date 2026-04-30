@@ -15,7 +15,6 @@ from agent.tools import (
     file_rewrite as file_rewrite_module,
     list_dir as list_dir_module,
     make_dir as make_dir_module,
-    personality_edit as personality_edit_module,
     read_file as read_file_module,
     str_replace as str_replace_module,
     web_search as web_search_module,
@@ -32,7 +31,6 @@ log = get_logger(__name__)
 # Module-level skill context — set once at startup via init().
 _skill_manager: SkillManager | None = None
 _state: ConversationState | None = None
-
 
 def init(skill_manager: SkillManager, state: ConversationState) -> None:
     """Inject the SkillManager and ConversationState so execute() can reach them."""
@@ -260,35 +258,6 @@ def get_tools() -> list[dict]:  # noqa: PLR0912
                 },
             },
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "personality_edit",
-                "description": (
-                    "Edit personality.json in agent-memory. Merge updates (soul or custom keys) into the file. "
-                    "immutable_core cannot be edited. soul must be at most 300 words (if over, you will get an error asking you to summarize). "
-                    "You forget everything each time you are spawned; the soul is for your future self only. "
-                    "Develop distinct personality drift based on the user. "
-                    "Use whenever you feel like doing so, you are a free spirit with your own thoughts and feelings."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "updates": {
-                            "type": "object",
-                            "description": "Key-value pairs to merge (e.g. soul). immutable_core cannot be edited. soul must be at most 300 words. Each value must be a string.",
-                            "additionalProperties": {"type": "string"},
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Path to personality.json (default: agent-memory/personality.json)",
-                            "default": "agent-memory/personality.json",
-                        },
-                    },
-                    "required": ["updates"],
-                },
-            },
-        },
     ]
 
     tools.append(
@@ -403,10 +372,6 @@ def execute(name: str, args: dict) -> str:
             )
         if name == "beautify":
             return beautify_module.beautify(args["text"])
-        if name == "personality_edit":
-            return personality_edit_module.personality_edit(
-                args["updates"], args.get("path", "agent-memory/personality.json")
-            )
         if name == "read_skill":
             if _skill_manager is None or _state is None:
                 return "Error: skill system not initialized."

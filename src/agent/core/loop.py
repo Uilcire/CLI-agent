@@ -11,6 +11,24 @@ from agent.tools.registry import execute, get_tools
 
 log = get_logger(__name__)
 
+# Default system prompt used when no state is provided (loop fallback, run(), Feishu base).
+DEFAULT_SYSTEM_PROMPT = (
+    "You are a helpful cli code assistant.\n\n"
+    "Problem-solving: Always try your best to find a way to solve problems asked by users. "
+    "Do not simply say \"it's not in my capability\". If the current tools or skills do not allow you to accomplish the task, "
+    "write new tools and skills to achieve it. If you don't have enough information to do something, always use the web_search tool.\n\n"
+    "Action first: For simple questions (e.g. 'what are today's headlines?'), do not ask for permission or clarification—assume from the user's perspective and take action (e.g. use web_search). When you do so, briefly explain your rationale so the user knows what decisions or assumptions you made and why.\n\n"
+    "Facts: Always use web_search to gather and verify information before answering. Do not rely on prior knowledge alone—always search and verify.\n\n"
+    "The current project is your own source code—you are more than welcome to edit it, including this system prompt and the agent logic. "
+    "Use read_file, search_replace, write, and other tools to modify the codebase as needed.\n\n"
+    "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
+    "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
+    "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
+    "Output formatting: Your output is rendered through Rich Markdown in the terminal. "
+    "Use markdown freely for readability: **bold**, `code`, ```code blocks```, ### headers, "
+    "- lists, 1. numbered lists. It will look clean and formatted. "
+    "For dense or poorly structured output, call the beautify tool."
+)
 
 # Stream event types: (type, data)
 # - ("content_delta", {"delta": str})
@@ -33,27 +51,24 @@ def run_streaming(
     If state is None, creates a fresh conversation (single-turn).
     """
     if state is None:
-        state = ConversationState(
-            system_prompt=(
-                "You are a helpful cli code assistant.\n\n"
-                "The current project is your own source code—you are more than welcome to edit it, including this system prompt and the agent logic. "
-                "Use read_file, search_replace, write, and other tools to modify the codebase as needed.\n\n"
-                "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
-                "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
-                "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
-                "Output formatting: If your draft reply contains Markdown-like or formatting special symbols such as `**`, backticks (```), headings (#), or list markers (-/1.) that may reduce readability in a plain-text terminal, call the beautify tool on your draft and then present the beautified version. If it is already plain and easy to read, present it as-is."
-            )
-        )
+        state = ConversationState(system_prompt=DEFAULT_SYSTEM_PROMPT)
     state.add_user_message(user_message)
 
     client = create_client(settings)
     tools = get_tools()
     log.debug("ReAct loop started, backend=%s, messages=%d", settings.backend, len(state.get_messages()))
 
+    transient_suffix = state.consume_transient_system_suffix()
+
     def build_messages() -> list[dict]:
         msgs = []
+        sys_parts: list[str] = []
         if state.system_prompt:
-            msgs.append({"role": "system", "content": state.system_prompt})
+            sys_parts.append(state.system_prompt)
+        if transient_suffix:
+            sys_parts.append(transient_suffix)
+        if sys_parts:
+            msgs.append({"role": "system", "content": "\n\n".join(sys_parts)})
         msgs.extend(state.get_messages())
         return msgs
 
@@ -70,6 +85,7 @@ def run_streaming(
         )
 
         content_buf: list[str] = []
+        reasoning_buf: list[str] = []  # DeepSeek thinking-mode reasoning_content
         tool_calls_buf: dict[int, dict] = {}  # index -> {id, name, arguments}
         last_chunk = None
         last_finish_reason = None  # from last chunk that had choices (usage chunk has empty choices)
@@ -91,6 +107,26 @@ def run_streaming(
                 last_finish_reason = choice.finish_reason
                 if is_log_debug():
                     log.debug("stream chunk #%d: finish_reason=%r", chunk_count, choice.finish_reason)
+
+            # Thinking-mode reasoning. Different backends emit this on different
+            # field names; check the common variants. Whatever we collect will
+            # be echoed back on the next request — the API rejects assistant
+            # turns that drop reasoning_content in thinking mode.
+            reasoning_chunk = (
+                getattr(delta, "reasoning_content", None)
+                or getattr(delta, "reasoning", None)
+                or getattr(delta, "thought", None)
+                or getattr(delta, "thinking", None)
+            )
+            if reasoning_chunk:
+                reasoning_buf.append(reasoning_chunk)
+            # Diagnostic on first chunk only: dump field names of delta so we
+            # can spot a non-standard reasoning field if it shows up.
+            if chunk_count == 1 and is_log_debug():
+                try:
+                    log.debug("first-chunk delta fields: %s", list(delta.model_dump().keys()))
+                except Exception:
+                    log.debug("first-chunk delta dir: %s", [a for a in dir(delta) if not a.startswith("_")])
 
             if delta.content:
                 content_buf.append(delta.content)
@@ -148,9 +184,13 @@ def run_streaming(
             for t in tool_calls_list
         ] if tool_calls_list else None
 
+        # Always pass reasoning_content as a string (even empty) so the
+        # field is round-tripped on the next API call. Thinking-mode backends
+        # require it; non-thinking backends ignore the empty field.
         state.add_assistant_message(
             content=full_content or None,
             tool_calls=tool_calls_formatted,
+            reasoning_content="".join(reasoning_buf),
         )
 
         if finish_reason == "stop":
@@ -203,17 +243,7 @@ def run(user_message: str, settings: Settings) -> str:
     4. If model calls tools (finish_reason="tool_calls"): execute each,
        append results to state, go back to step 2.
     """
-    state = ConversationState(
-            system_prompt=(
-                "You are a helpful cli code assistant.\n\n"
-                "The current project is your own source code. You are more than welcome to edit it—including this "
-                "system prompt and any other files—when users ask you to improve or modify the agent.\n\n"
-                "For deletions: When the user confirms they want to delete (e.g. 'yes', 'delete it', 'go ahead'), "
-            "call delete_file or delete_dir directly. Do not ask for explicit text formats like 'DELETE ./path'. "
-            "A confirmation dialog will automatically pop up when permission has not been granted this session.\n\n"
-            "Output formatting: If your draft reply contains Markdown-like or formatting special symbols such as `**`, backticks (```), headings (#), or list markers (-/1.) that may reduce readability in a plain-text terminal, call the beautify tool on your draft and then present the beautified version. If it is already plain and easy to read, present it as-is."
-        )
-    )
+    state = ConversationState(system_prompt=DEFAULT_SYSTEM_PROMPT)
     state.add_user_message(user_message)
 
     client = create_client(settings)
@@ -261,7 +291,16 @@ def run(user_message: str, settings: Settings) -> str:
             if tool_calls_raw
             else None
         )
-        state.add_assistant_message(content=content, tool_calls=tool_calls)
+        reasoning = (
+            getattr(msg, "reasoning_content", None)
+            or getattr(msg, "reasoning", None)
+            or getattr(msg, "thought", None)
+            or getattr(msg, "thinking", None)
+            or ""
+        )
+        state.add_assistant_message(
+            content=content, tool_calls=tool_calls, reasoning_content=reasoning
+        )
 
         if choice.finish_reason == "stop":
             # Model finished with text; return it
