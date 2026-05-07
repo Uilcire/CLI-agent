@@ -85,6 +85,8 @@ def test_apply_writes_layer1_append(store: AssistantMemoryStore):
                 "operation": "append",
                 "content": "- allergic to peanuts",
                 "layer": 1,
+                "compiled_update": True,
+                "source_type": "self-described",
                 "reason": "user said so",
             }
         ],
@@ -330,9 +332,12 @@ def test_consolidate_session_blocks_forbidden_paths(store: AssistantMemoryStore)
     assert not (store.root / "identity" / "agent.md").exists() or \
         "rewriting soul lol" not in (store.root / "identity" / "agent.md").read_text()
     assert "should also be blocked" not in (store.root / "context" / "current.md").read_text() if (store.root / "context" / "current.md").exists() else True
-    # allowed write should land
-    _, body = store.read_file("people/alex.md")
-    assert "Alex" in body
+    # tier-3 stub page exists with bumped mention counter (Phase D);
+    # compiled-truth body content is filtered until tier escalates.
+    meta, body = store.read_file("people/alex.md")
+    assert meta.get("mention_count") == 1
+    assert meta.get("tier") == 3
+    assert "## Timeline" in body
 
 
 def test_consolidate_session_handles_parse_failure(store: AssistantMemoryStore):
@@ -479,30 +484,6 @@ def test_manifest_update_caps_length(store: AssistantMemoryStore):
     content = store.read_manifest("people")
     for ln in content.splitlines():
         assert len(ln) <= 600  # cap is 500 + small headroom
-
-
-# ---- _extract_learnings ------------------------------------------------
-
-
-def test_extract_learnings_section_only():
-    from agent.assistant_memory.curator import _extract_learnings
-
-    digest = (
-        "## What happened\n- chatted\n\n"
-        "## Decisions / facts learned\n- prefers V60\n- allergic to peanuts\n\n"
-        "## Open threads\n- maybe Tokyo trip\n"
-    )
-    out = _extract_learnings(digest)
-    assert "prefers V60" in out
-    assert "allergic to peanuts" in out
-    assert "maybe Tokyo trip" not in out
-    assert "chatted" not in out
-
-
-def test_extract_learnings_missing_heading_returns_empty():
-    from agent.assistant_memory.curator import _extract_learnings
-
-    assert _extract_learnings("## Something else\n- foo\n") == ""
 
 
 def test_append_to_section_inserts_under_heading():

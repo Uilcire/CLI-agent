@@ -16,7 +16,9 @@ Available scopes (from the index):
 - identity/      — who the user is + agent's own soul
 - people/        — people in the user's life
 - preferences/   — user's tastes and habits
-- projects/      — active and past projects
+- life/          — long-lived life domains (health, finance, home, career, hobbies, ...)
+- threads/       — long-running intentions and goals (learn-japanese, wedding-2026, ...)
+- events/        — recurring obligations + one-off upcoming events
 - log/           — event history (monthly summaries available)
 
 Note: `context/current.md` is always loaded automatically. Do NOT include it.
@@ -41,6 +43,9 @@ STAGE2_FILE_PROMPT = """You are the FILE SELECTOR for a personal-assistant memor
 
 Given the user's query, recent turns, and the manifests of the scopes already chosen,
 pick at most 5 specific files whose contents are likely needed to answer.
+
+Files live under one of these scopes:
+people/, preferences/, life/, threads/, events/, log/.
 
 # Recent turns
 {recent_turns}
@@ -103,6 +108,20 @@ Layers:
 
 If unsure between layer 1 and layer 2, choose 2.
 
+User corrections take precedence over inferred facts: when the user explicitly corrects
+or overrides something this turn, prefer that over anything you inferred earlier.
+
+Routing — pick the destination by the *kind* of fact:
+- person mentioned (name, role, relationship, attribute) → `people/<slug>.md`
+- long-running intention or goal (multi-week, has an outcome) → `threads/<slug>.md`
+- recurring obligation/event (weekly standup, monthly bill) → `events/recurring.md`
+- one-off upcoming event with a date (flight, wedding, deadline) → `events/upcoming.md`
+- life-domain fact (health, finance, home, career, hobbies) → `life/<domain>.md`
+- preference / taste / habit → `preferences/<topic>.md`
+
+Forbidden destinations (never write here): `identity/agent.md`, `identity/me.md`,
+`context/current.md`. These are user- or curator-Layer-2-only.
+
 Special rule — agent identity edits: any write to `identity/agent.md` (the agent's own
 soul / personality) is ALWAYS Layer 2. Never silent-write the agent's personality.
 The `immutable_core` frontmatter field MUST NOT be modified — refuse such writes.
@@ -112,6 +131,22 @@ Operations:
 - "append"        — add content to end of file body
 - "update_field"  — set a frontmatter field
 - "create"        — new file (provide full frontmatter + body in `content`)
+
+Two-layer pages (people/, life/, threads/, preferences/):
+Pages have a Compiled Truth section (current state, can be rewritten) and a Timeline
+(append-only event log). Most writes only append to Timeline:
+
+- DEFAULT: `compiled_update: false` — the curator just appends a Timeline entry.
+- Set `compiled_update: true` ONLY when the new info changes the *current state*
+  (e.g. user got a new job, moved cities, finished a project). Use sparingly.
+
+Sourcing discipline (REQUIRED for every fact bullet that lands in a State section):
+- `source_type`: one of "observed" (you saw it in conversation),
+  "self-described" (user stated it directly), "inferred" (you guessed).
+- For `inferred` you MUST also set `confidence: "low" | "medium" | "high"`.
+- If the latest user message is a CORRECTION (contains "no", "actually", "not",
+  "correction"), the curator will force `source_type: self-described` and tag the
+  Timeline entry with `[CORRECTION]`.
 
 Manifest updates: one entry per affected manifest line. `line_key` identifies the line
 (typically the filename). `new_line` is the full replacement line text. Omit if no
@@ -123,8 +158,11 @@ Respond with JSON only, no commentary, no markdown fences:
     {{
       "file": "people/alex.md",
       "operation": "append",
-      "content": "...",
+      "content": "- prefers async communication",
       "layer": 1,
+      "compiled_update": false,
+      "source_type": "observed",
+      "confidence": null,
       "reason": "<one sentence>"
     }}
   ],
@@ -145,17 +183,22 @@ strengthened, or newly established across multiple turns — facts the per-turn 
 may have missed because they only became clear in aggregate.
 
 Examples of what to consolidate:
-- A goal or interest mentioned 2+ times → add to identity/me.md or relevant project.
-- A person mentioned 2+ times by name with attributes → create or update people/<name>.md.
+- A person mentioned 2+ times by name with attributes → create or update people/<slug>.md.
 - A preference reinforced or corrected across the session → update preferences/<topic>.md.
-- A new project the user is working on → create projects/<id>.md.
+- A long-running intention/goal the user keeps returning to → create or update threads/<slug>.md.
+- A recurring obligation surfaced this session → append to events/recurring.md.
+- A specific upcoming event with a date → append to events/upcoming.md.
+- A life-domain fact that has stabilized (health, finance, home, career, hobbies)
+  → update life/<domain>.md.
 
 Forbidden writes (never propose):
 - `identity/agent.md` — the agent's soul. Soul evolution is out of scope here.
-- `identity/me.md` immutable fields (email, birthday, school) unless user explicitly stated
-  a change this session. Adding new sub-bullets to existing sections is fine.
+- `identity/me.md` — user-maintained identity. Never auto-edit.
 - `context/current.md` — user-maintained, never auto-edit.
 - Anything contradicting an existing immutable_core or frontmatter `immutable: true` field.
+
+User corrections take precedence over inferred facts: where this session contains an
+explicit correction, prefer it over earlier inferences.
 
 Conservative rule: if a "fact" only came up ONCE and wasn't directly stated as durable,
 SKIP IT. Single-mention noise is the per-turn curator's job, not yours. You synthesize.
@@ -173,3 +216,37 @@ or low-signal sessions.
 JSON:
 """
 
+
+SIGNAL_DETECTOR_PROMPT = """You are the SIGNAL DETECTOR for a personal-assistant memory system.
+
+Your job: scan the user's latest message (with brief recent context) and extract structured
+signals that downstream retrieval and curation can use. Run cheap and fast — no synthesis,
+no judgment. Just surface what is *literally mentioned* in the user message.
+
+Categories:
+- entities: named people, places, organizations, or events (proper nouns).
+  - "type" is one of "person" | "place" | "org" | "event"
+  - "name" is the surface form
+  - "slug" is a lowercase a-z0-9 + "-" version (used as a retrieval hint / filename hook)
+- intentions: long-term goals, threads, or aspirations the user names.
+- events: specific upcoming or past events with a time anchor.
+- preferences: likes/dislikes the user expresses ("I love X", "I hate Y").
+- corrections: user explicitly correcting or overriding an earlier fact.
+
+# Recent turns
+{recent_turns}
+
+# Latest user message
+{user_msg}
+
+Respond with JSON only, no commentary, no markdown fences:
+{{
+  "entities": [{{"type": "person", "name": "Alex Chen", "slug": "alex-chen"}}],
+  "intentions": ["learn rust"],
+  "events": [{{"when": "2026-05-10", "what": "team offsite"}}],
+  "preferences": ["likes oat milk"],
+  "corrections": []
+}}
+
+Empty arrays are fine — only fill what is clearly present. Do NOT invent or infer.
+"""

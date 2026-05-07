@@ -12,15 +12,96 @@ from typing import Any, Callable
 from agent.config.settings import Settings
 from agent.llm.client import create_client
 
+from .page import (
+    append_timeline,
+    format_sourced_bullet,
+    join_layers,
+    rewrite_compiled,
+    split_layers,
+)
 from .prompts import CONSOLIDATION_PROMPT, CURATOR_PROMPT
 from .schema import dump_frontmatter, parse_frontmatter, pick_model
 from .store import SCOPES, AssistantMemoryStore
+from .templates import (
+    LIFE_DOMAIN_TEMPLATE,
+    PERSON_TEMPLATE,
+    PREFERENCE_TEMPLATE,
+    THREAD_TEMPLATE,
+    render_template,
+)
+from .tiers import (
+    people_slug_from_path,
+    record_mention,
+    update_people_manifest_line,
+)
 
 
 logger = logging.getLogger(__name__)
 
 
 _MEMORY_NOTE_RE = re.compile(r"\[memory note:\s*(.*?)\]", re.IGNORECASE | re.DOTALL)
+
+_CORRECTION_RE = re.compile(
+    r"\b(no,|nope|actually|correction|that's wrong|that is wrong|not\b)",
+    re.IGNORECASE,
+)
+
+_TEMPLATE_BY_SCOPE: dict[str, str] = {
+    "people": PERSON_TEMPLATE,
+    "life": LIFE_DOMAIN_TEMPLATE,
+    "threads": THREAD_TEMPLATE,
+    "preferences": PREFERENCE_TEMPLATE,
+}
+
+
+def _scope_of(rel: str) -> str:
+    return rel.split("/", 1)[0] if "/" in rel else ""
+
+
+def _today_iso() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _detect_correction(text: str) -> bool:
+    return bool(_CORRECTION_RE.search(text or ""))
+
+
+def _wrap_state_bullets(
+    content: str,
+    source_type: str,
+    confidence: str | None,
+    date: str | None,
+) -> str:
+    """Re-tag any plain bullet line in ``content`` with a sourcing marker.
+
+    Lines already carrying ``_[...]_`` are left alone. Non-bullet lines pass
+    through unchanged. Used when content lands in a State section.
+    """
+    if not content:
+        return content
+    out: list[str] = []
+    for raw in content.splitlines():
+        line = raw.rstrip()
+        stripped = line.lstrip()
+        if not stripped.startswith("- "):
+            out.append(raw)
+            continue
+        if "_[" in stripped and stripped.rstrip().endswith("]_"):
+            out.append(raw)
+            continue
+        text = stripped[2:].strip()
+        if not text:
+            out.append(raw)
+            continue
+        try:
+            tagged = format_sourced_bullet(text, source_type, date=date, confidence=confidence)
+        except ValueError:
+            out.append(raw)
+            continue
+        indent = line[: len(line) - len(stripped)]
+        out.append(f"{indent}{tagged}")
+    return "\n".join(out)
+
 
 _FORBIDDEN_PATHS: tuple[str, ...] = (
     "identity/agent.md",
@@ -97,6 +178,7 @@ class Curator:
         self.settings = settings
         self.client = create_client(settings)
         self.model = pick_model(settings, prefer="pro")
+        self._last_user_msg: str = ""
 
     # ---- proposal --------------------------------------------------------
 
@@ -105,8 +187,15 @@ class Curator:
         user_msg: str,
         assistant_msg: str,
         recent_turns: list[dict],
+        signals: dict | None = None,
     ) -> dict:
-        """Ask the curator LLM what to write. Always returns a dict with both keys."""
+        """Ask the curator LLM what to write. Always returns a dict with both keys.
+
+        ``signals`` is the signal-detector output. When non-empty it is appended
+        to the prompt so the curator LLM doesn't re-discover what was already
+        extracted on the user-side pass.
+        """
+        self._last_user_msg = user_msg or ""
         recent_str = _format_turns(recent_turns)
         prompt = (
             CURATOR_PROMPT
@@ -117,6 +206,18 @@ class Curator:
             + "\n\n# Last assistant message\n"
             + (assistant_msg or "")
         )
+        if isinstance(signals, dict) and any(signals.get(k) for k in signals):
+            try:
+                signals_json = json.dumps(signals, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                signals_json = ""
+            if signals_json:
+                prompt += (
+                    "\n\n# Signals already detected from user message\n"
+                    "(Pre-extracted by the signal detector — use as a starting point, "
+                    "do not re-discover.)\n"
+                    + signals_json
+                )
         try:
             resp = self.client.chat.completions.create(
                 model=self.model,
@@ -154,6 +255,35 @@ class Curator:
         # Hold the store lock across the whole batch so consolidation and
         # per-turn pipelines do not interleave reads/writes on the same files.
         with self.store._lock:
+            today_iso = datetime.now().strftime("%Y-%m-%d")
+            people_meta_cache: dict[str, dict[str, Any]] = {}
+
+            # Pre-pass: for any write touching people/<slug>.md, bump the
+            # mention counter (creating a stub if needed) BEFORE the LLM-
+            # proposed body lands. Cache the resulting frontmatter so later
+            # tier-based filtering can consult it without an extra read.
+            for write in writes:
+                if not isinstance(write, dict):
+                    continue
+                # update_field is a frontmatter touch-up, not a mention; skip.
+                if write.get("operation") == "update_field":
+                    continue
+                rel = write.get("file")
+                slug = people_slug_from_path(rel) if isinstance(rel, str) else None
+                if slug is None or slug in people_meta_cache:
+                    continue
+                relation = write.get("relation") if isinstance(write.get("relation"), str) else None
+                try:
+                    meta = record_mention(self.store, slug, today_iso, relation=relation)
+                except Exception as exc:  # pragma: no cover - paranoia
+                    logger.warning("record_mention failed for %s: %s", slug, exc)
+                    continue
+                people_meta_cache[slug] = meta
+                try:
+                    update_people_manifest_line(self.store, slug, meta)
+                except Exception as exc:  # pragma: no cover
+                    logger.warning("people manifest update failed for %s: %s", slug, exc)
+
             for write in writes:
                 if not isinstance(write, dict):
                     continue
@@ -168,11 +298,32 @@ class Curator:
                         continue
                     if not ok:
                         continue
+
+                # Tier guard: tier-3 (stub) people pages get Timeline-only writes.
+                rel = write.get("file")
+                slug = people_slug_from_path(rel) if isinstance(rel, str) else None
+                if slug is not None and slug in people_meta_cache:
+                    if not self._should_write_compiled(people_meta_cache[slug]):
+                        write = _strip_compiled_truth(write)
+                        if write is None:
+                            logger.info(
+                                "curator skipped compiled-truth write to tier-3 page: %s", rel
+                            )
+                            continue
+
                 msg = self._apply_single(write)
                 if msg:
                     applied.append(msg)
                     logger.info("curator wrote: %s (layer %s)", msg, layer)
         return applied
+
+    def _should_write_compiled(self, frontmatter: dict) -> bool:
+        """True when a page's tier permits compiled-truth content (tier <= 2)."""
+        try:
+            tier = int(frontmatter.get("tier", 3))
+        except (TypeError, ValueError):
+            tier = 3
+        return tier <= 2
 
     def _apply_single(self, write: dict) -> str | None:
         op = write.get("operation")
@@ -195,13 +346,45 @@ class Curator:
             return None
 
         content = write.get("content", "")
+        scope = _scope_of(rel)
+        today = _today_iso()
+        is_correction = _detect_correction(self._last_user_msg)
+        source_type = write.get("source_type")
+        if is_correction:
+            source_type = "self-described"
+        if source_type not in ("observed", "self-described", "inferred"):
+            source_type = "observed"
+        confidence = write.get("confidence") if source_type == "inferred" else None
+        if source_type == "inferred" and confidence not in ("low", "medium", "high"):
+            confidence = "low"
+        timeline_summary = (write.get("reason") or content or "").strip().splitlines()[0:1]
+        timeline_summary = timeline_summary[0] if timeline_summary else "(update)"
+        if is_correction:
+            timeline_summary = f"[CORRECTION] {timeline_summary}"
+        timeline_source = "user" if is_correction or source_type == "self-described" else "session"
+        compiled_update = bool(write.get("compiled_update", False))
 
         if op == "append":
             meta, body = self.store.read_file(rel)
+            tagged = _wrap_state_bullets(content, source_type, confidence, today)
+            template = _TEMPLATE_BY_SCOPE.get(scope)
+            if template is not None:
+                # Two-layer page: timeline-append by default; compiled rewrite only on flag.
+                compiled, _ = split_layers(body or "")
+                if compiled_update and tagged.strip():
+                    new_compiled = compiled.rstrip() + "\n\n" + tagged.strip() + "\n"
+                    body = rewrite_compiled(body or "", new_compiled)
+                    if isinstance(meta, dict):
+                        meta = dict(meta)
+                        meta["last_updated"] = today
+                # Always append a timeline entry citing this turn.
+                body = append_timeline(body, today, timeline_source, timeline_summary)
+                self.store.write_file(rel, meta, body)
+                return f"Appended to {rel}"
             new_body = (
-                (body.rstrip() + "\n\n" + content.strip() + "\n")
+                (body.rstrip() + "\n\n" + tagged.strip() + "\n")
                 if body
-                else (content.strip() + "\n")
+                else (tagged.strip() + "\n")
             )
             self.store.write_file(rel, meta, new_body)
             return f"Appended to {rel}"
@@ -218,6 +401,51 @@ class Curator:
             if not meta and isinstance(write.get("meta"), dict):
                 meta = write["meta"]
                 body = content if isinstance(content, str) else ""
+
+            template = _TEMPLATE_BY_SCOPE.get(scope)
+            if template is not None:
+                # Render template, drop LLM-proposed body into Compiled-Truth State,
+                # and seed Timeline with a creation entry.
+                title = ""
+                if isinstance(meta, dict):
+                    title = str(meta.get("name") or meta.get("title") or "")
+                if not title:
+                    title = rel.rsplit("/", 1)[-1].removesuffix(".md").replace("-", " ").title()
+                tagged_body = _wrap_state_bullets(body or "", source_type, confidence, today)
+                fields: dict[str, object] = {
+                    "title": title,
+                    "name": title,
+                    "last_updated": today,
+                    "state": tagged_body.strip() or "- (none yet)",
+                    "body": tagged_body.strip() or "(none yet)",
+                }
+                if isinstance(meta, dict):
+                    for key in (
+                        "aliases",
+                        "relation",
+                        "tier",
+                        "domain",
+                        "topic",
+                        "status",
+                        "started",
+                        "target_date",
+                        "summary",
+                    ):
+                        if meta.get(key) is not None:
+                            fields[key] = meta.get(key)
+                rendered = render_template(template, **fields)
+                tmpl_meta, tmpl_body = parse_frontmatter(rendered)
+                final_meta = dict(tmpl_meta)
+                if isinstance(meta, dict):
+                    for k, v in meta.items():
+                        if k not in final_meta or final_meta[k] in ("", None):
+                            final_meta[k] = v
+                final_body = append_timeline(
+                    tmpl_body, today, timeline_source, timeline_summary
+                )
+                self.store.write_file(rel, final_meta, final_body)
+                return f"Created {rel}"
+
             self.store.write_file(rel, meta or {}, body)
             return f"Created {rel}"
 
@@ -305,7 +533,7 @@ class Curator:
             return []
 
         manifest_blocks: list[str] = []
-        for scope in ("people", "preferences", "projects"):
+        for scope in ("people", "preferences", "life", "threads", "events"):
             content = self.store.read_manifest(scope) or "(empty)"
             manifest_blocks.append(f"=== {scope}/_manifest.md ===\n{content}")
         manifests = "\n\n".join(manifest_blocks)
@@ -352,12 +580,8 @@ class Curator:
 
     # ---- session digest --------------------------------------------------
 
-    def summarize_session(
-        self,
-        messages: list[dict],
-        project_id: str | None,
-    ) -> None:
-        """Build a session digest and append to today's log; optional project learnings."""
+    def summarize_session(self, messages: list[dict]) -> None:
+        """Build a session digest and append to today's log."""
         if not messages:
             return
         transcript = _format_turns(messages)
@@ -396,17 +620,6 @@ class Curator:
 
             # One-line monthly summary into log/_manifest.md.
             self._append_log_monthly(month, date, digest)
-
-            if project_id:
-                proj_rel = f"projects/{project_id}.md"
-                pmeta, pbody = self.store.read_file(proj_rel)
-                if pbody or pmeta:
-                    condensed = _extract_learnings(digest)
-                    if condensed:
-                        pbody = _append_to_section(pbody, "## Learnings", condensed)
-                        pmeta = dict(pmeta)
-                        pmeta["last_summarized_session"] = date
-                        self.store.write_file(proj_rel, pmeta, pbody)
 
     def _append_log_monthly(self, month: str, date: str, digest: str) -> None:
         """Append a one-line digest summary under the YYYY-MM section of log/_manifest.md."""
@@ -447,6 +660,50 @@ class Curator:
 
 
 # ---- helpers -------------------------------------------------------------
+
+
+def _strip_compiled_truth(write: dict) -> dict | None:
+    """For a tier-3 people-page write, drop compiled-truth content; keep only timeline.
+
+    Returns ``None`` when the write would be empty after stripping (e.g. an
+    ``update_field`` on a non-tier field, or a body with no timeline section).
+    The caller can then skip the write entirely.
+    """
+    op = write.get("operation")
+    # update_field is allowed only when it touches frontmatter (tier/relation/etc).
+    # Body-level field writes don't exist in this curator, so allow through.
+    if op == "update_field":
+        return write
+
+    content = write.get("content")
+    if not isinstance(content, str) or not content.strip():
+        return None
+
+    if op == "create":
+        # Preserve frontmatter fence if any; strip compiled portion of body.
+        meta, body = parse_frontmatter(content)
+        compiled, timeline = split_layers(body)
+        if not timeline.strip():
+            return None
+        new_body = join_layers("", timeline)
+        new_content = dump_frontmatter(meta, new_body) if meta else new_body
+        new_write = dict(write)
+        new_write["content"] = new_content
+        return new_write
+
+    if op == "append":
+        # Heuristic: if appended text looks like a timeline bullet, keep it;
+        # otherwise drop. Timeline bullets start with '- ' and are ≤ a few lines.
+        stripped = content.strip()
+        if stripped.startswith("## Timeline"):
+            return write
+        # If multi-paragraph, treat as compiled-truth content and drop.
+        if "\n\n" in stripped:
+            return None
+        # Otherwise allow short bullets / single lines through.
+        return write
+
+    return write
 
 
 def _format_turns(turns: list[dict]) -> str:

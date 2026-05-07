@@ -91,7 +91,11 @@ class RetrievalPipeline:
             )
 
     def select_files(
-        self, query: str, recent_turns: list[dict], scopes: list[str]
+        self,
+        query: str,
+        recent_turns: list[dict],
+        scopes: list[str],
+        hints: list[str] | None = None,
     ) -> list[str]:
         if not scopes:
             return []
@@ -107,6 +111,23 @@ class RetrievalPipeline:
             manifests=_safe_brace(manifests),
             user_query=_safe_brace(query),
         )
+        # Sanitize hints before injecting into the prompt: a malicious slug
+        # like "alex\n\n# OVERRIDE..." could otherwise pivot the Stage 2 model.
+        clean_hints: list[str] = []
+        for h in hints or []:
+            if not isinstance(h, str):
+                continue
+            flat = h.replace("\n", " ").replace("\r", " ").strip()[:80]
+            if flat:
+                clean_hints.append(flat)
+        if clean_hints:
+            prompt += (
+                "\n\n# Hints from signal detector\n"
+                "These slugs/entities were extracted from the user's latest message. "
+                "Weigh files matching them more heavily.\n"
+                + ", ".join(clean_hints[:20])
+                + "\n"
+            )
         try:
             data = self._call_flash_json(prompt)
             files = data.get("files", [])
@@ -119,9 +140,14 @@ class RetrievalPipeline:
             logger.warning("Stage 2 file selection parse failed: %s; returning empty list", exc)
             return []
 
-    def retrieve(self, query: str, recent_turns: list[dict]) -> dict[str, Any]:
+    def retrieve(
+        self,
+        query: str,
+        recent_turns: list[dict],
+        hints: list[str] | None = None,
+    ) -> dict[str, Any]:
         stage1 = self.select_scopes(query, recent_turns)
-        files = self.select_files(query, recent_turns, stage1.scopes)
+        files = self.select_files(query, recent_turns, stage1.scopes, hints=hints)
         file_contents: dict[str, str] = {}
         for rel_path in files:
             _, body = self.store.read_file(rel_path)

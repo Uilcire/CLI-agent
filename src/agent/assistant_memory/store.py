@@ -14,7 +14,16 @@ from .schema import dump_frontmatter, parse_frontmatter
 logger = logging.getLogger(__name__)
 
 
-SCOPES: tuple[str, ...] = ("identity", "people", "preferences", "projects", "context", "log")
+SCOPES: tuple[str, ...] = (
+    "identity",
+    "people",
+    "preferences",
+    "life",
+    "threads",
+    "events",
+    "context",
+    "log",
+)
 
 
 class AssistantMemoryStore:
@@ -43,6 +52,12 @@ class AssistantMemoryStore:
         # Drive-letter / windows-style absolutes.
         if len(rel_path) >= 2 and rel_path[1] == ":":
             raise ValueError(f"rel_path must be relative: {rel_path!r}")
+        # Reject any '..' segment in the RAW input (before normpath collapses
+        # mid-path traversals like 'people/../identity/agent.md' into a clean
+        # in-root path that bypasses ACL checks downstream).
+        raw_parts = rel_path.replace("\\", "/").split("/")
+        if any(p == ".." for p in raw_parts):
+            raise ValueError(f"rel_path contains '..': {rel_path!r}")
 
         normalized = os.path.normpath(rel_path)
         if normalized.startswith("..") or normalized == "." or normalized == "":

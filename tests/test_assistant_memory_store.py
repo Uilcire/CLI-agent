@@ -90,7 +90,7 @@ def test_read_current_context_missing(tmp_path: Path) -> None:
 
 def test_store_creates_scope_dirs(tmp_path: Path) -> None:
     AssistantMemoryStore(tmp_path)
-    for scope in ("identity", "people", "preferences", "projects", "context", "log"):
+    for scope in ("identity", "people", "preferences", "life", "threads", "events", "context", "log"):
         assert (tmp_path / scope).is_dir()
 
 

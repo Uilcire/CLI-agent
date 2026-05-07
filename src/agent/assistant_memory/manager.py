@@ -1,85 +1,23 @@
-"""AssistantMemoryManager — replaces the old MemoryManager facade.
-
-Public interface mirrors the old `agent.memory.manager.MemoryManager` so
-`cli/app.py` (and any other callers) keep working unchanged.
-"""
+"""AssistantMemoryManager — replaces the old MemoryManager facade."""
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import os
-import re
 import threading
-import time
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from agent.config.settings import Settings
 
 from .curator import Curator, rebuild_manifest
 from .retrieval import RetrievalPipeline
 from .schema import parse_frontmatter
+from .signal_detector import SignalDetector
 from .store import SCOPES, AssistantMemoryStore
 
 
 logger = logging.getLogger(__name__)
 
 _RECENT_TURN_CAP = 6  # 3 user + 3 assistant
-
-
-@dataclass
-class ProjectView:
-    """Lightweight view of a project file for cli/app.py consumers."""
-
-    project_id: str
-    description: str = ""
-    cwd: str = ""
-    status: str = "active"
-    tags: list[str] = field(default_factory=list)
-    capabilities: list[str] = field(default_factory=list)
-
-
-# Back-compat alias — old name retained one release for external imports.
-MigratedProjectView = ProjectView
-
-
-def _cwd_project_id(cwd: str) -> str:
-    abs_cwd = os.path.abspath(cwd)
-    return hashlib.sha256(abs_cwd.encode()).hexdigest()[:12]
-
-
-def _slugify(text: str, max_len: int = 40) -> str:
-    s = (text or "").strip().lower()
-    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
-    if not s:
-        return f"project-{int(time.time())}"
-    return s[:max_len].rstrip("-") or f"project-{int(time.time())}"
-
-
-def _project_view_from_file(meta: dict[str, Any], body: str, project_id: str) -> ProjectView:
-    description = ""
-    # Pull description from "## Description" section.
-    desc_match = re.search(r"##\s*Description\s*\n+([^\n#].*?)(?:\n##|\Z)", body, re.DOTALL)
-    if desc_match:
-        description = desc_match.group(1).strip().splitlines()[0].strip() if desc_match.group(1).strip() else ""
-    if not description:
-        description = str(meta.get("description") or project_id)
-    tags = meta.get("tags") or []
-    if not isinstance(tags, list):
-        tags = []
-    caps = meta.get("capabilities") or []
-    if not isinstance(caps, list):
-        caps = []
-    return ProjectView(
-        project_id=str(meta.get("project_id") or project_id),
-        description=description,
-        cwd=str(meta.get("cwd") or ""),
-        status=str(meta.get("status") or "active"),
-        tags=[str(t) for t in tags],
-        capabilities=[str(c) for c in caps],
-    )
 
 
 class AssistantMemoryManager:
@@ -91,16 +29,16 @@ class AssistantMemoryManager:
         self.store = AssistantMemoryStore(Path(data_dir))
         self.retrieval = RetrievalPipeline(self.store, settings)
         self.curator = Curator(self.store, settings)
+        self.signal_detector = SignalDetector(self.store, settings)
         self.recent_turns: list[dict] = []
         self._active_session_messages: list[dict] = []
-        self.project_id: str | None = None
+        self._latest_signals: dict = {}
         self._last_curator_thread: threading.Thread | None = None
 
     # ---- lifecycle -------------------------------------------------------
 
-    def on_startup(self, project_id: str | None = None) -> str:
+    def on_startup(self) -> str:
         try:
-            self.project_id = project_id
             self.recent_turns = []
             self._active_session_messages = []
 
@@ -129,12 +67,14 @@ class AssistantMemoryManager:
             return ""
 
     def retrieve_for_query(self, query: str) -> str:
-        """Run two-stage retrieval and format a markdown block for system-prompt injection.
-
-        Returns ``""`` when retrieval yields nothing or fails.
-        """
+        """Run two-stage retrieval and format a markdown block for system-prompt injection."""
         try:
-            result = self.retrieval.retrieve(query, list(self.recent_turns))
+            hints = [
+                e.get("slug", "")
+                for e in self._latest_signals.get("entities", [])
+                if e.get("slug")
+            ]
+            result = self.retrieval.retrieve(query, list(self.recent_turns), hints=hints)
         except Exception as exc:
             logger.warning("retrieve_for_query failed: %s", exc)
             return ""
@@ -159,7 +99,6 @@ class AssistantMemoryManager:
 
             header_lines = ["# Retrieved memories"]
             if user_summary.strip():
-                # _index.md user_summary one-liner reference.
                 header_lines.append(f"<!-- _index.md user_summary: {user_summary.strip()} -->")
 
             return "\n\n".join(header_lines + sections)
@@ -176,6 +115,18 @@ class AssistantMemoryManager:
             self._active_session_messages.append(entry)
         except Exception as exc:
             logger.warning("on_user_turn failed: %s", exc)
+            return
+
+        snapshot = list(self.recent_turns)
+        detector = self.signal_detector
+
+        def _run_detector() -> None:
+            try:
+                self._latest_signals = detector.detect(content, snapshot)
+            except Exception as exc:
+                logger.warning("signal detect failed: %s", exc)
+
+        threading.Thread(target=_run_detector, daemon=True).start()
 
     def on_assistant_turn(self, content: str) -> None:
         try:
@@ -188,7 +139,6 @@ class AssistantMemoryManager:
             logger.warning("on_assistant_turn append failed: %s", exc)
             return
 
-        # Last user message is the most recent role=user turn.
         last_user = ""
         for t in reversed(self.recent_turns[:-1]):
             if t.get("role") == "user":
@@ -200,7 +150,9 @@ class AssistantMemoryManager:
 
         def _run_curator() -> None:
             try:
-                proposal = curator.propose_writes(last_user, content, recent_snapshot)
+                proposal = curator.propose_writes(
+                    last_user, content, recent_snapshot, signals=self._latest_signals
+                )
                 curator.apply_writes(proposal, confirm_callback=None)
                 curator.apply_manifest_updates(proposal.get("manifest_updates", []))
             except Exception as exc:
@@ -214,15 +166,12 @@ class AssistantMemoryManager:
         try:
             if not self._active_session_messages:
                 return None
-            # Wait briefly for the most recent per-turn curator to finish so
-            # consolidation reads a fresh manifest. Bounded — don't hang exit.
             if self._last_curator_thread is not None:
                 try:
                     self._last_curator_thread.join(timeout=2.0)
                 except Exception as exc:
                     logger.warning("curator thread join failed: %s", exc)
             messages = list(self._active_session_messages)
-            project_id = self.project_id
             curator = self.curator
 
             def _run() -> None:
@@ -231,7 +180,7 @@ class AssistantMemoryManager:
                 except Exception as exc:
                     logger.warning("consolidation pass failed: %s", exc)
                 try:
-                    curator.summarize_session(messages, project_id)
+                    curator.summarize_session(messages)
                 except Exception as exc:
                     logger.warning("background session digest failed: %s", exc)
 
@@ -242,101 +191,6 @@ class AssistantMemoryManager:
             logger.exception("on_exit failed: %s", exc)
             return f"Session ended (error: {exc})."
 
-    # ---- project lookup --------------------------------------------------
-
-    def find_project_for_cwd(self, cwd: str) -> ProjectView | None:
-        try:
-            pid = _cwd_project_id(cwd)
-            rel = f"projects/{pid}.md"
-            full_path = Path(self.data_dir) / rel
-            if not full_path.exists():
-                return None
-            meta, body = self.store.read_file(rel)
-            if not meta and not body:
-                return None
-            return _project_view_from_file(meta, body, pid)
-        except Exception as exc:
-            logger.warning("find_project_for_cwd failed: %s", exc)
-            return None
-
-    def onboard_for_cwd(self, cwd: str, print_fn=print) -> ProjectView | None:
-        try:
-            existing = self.find_project_for_cwd(cwd)
-            if existing is not None:
-                return existing
-            pid = _cwd_project_id(cwd)
-            abs_cwd = os.path.abspath(cwd)
-            description = os.path.basename(abs_cwd) or pid
-            meta = {
-                "project_id": pid,
-                "cwd": abs_cwd,
-                "status": "active",
-                "tags": [],
-                "capabilities": [],
-                "last_summarized_session": None,
-            }
-            body = f"# {description}\n\n## Description\n\n{description}\n\n## Learnings\n\n"
-            self.store.write_file(f"projects/{pid}.md", meta, body)
-            self._append_manifest_line("projects", pid, abs_cwd, description)
-            print_fn(f"Created new project: {description} [{pid}]")
-            return _project_view_from_file(meta, body, pid)
-        except Exception as exc:
-            logger.exception("onboard_for_cwd failed: %s", exc)
-            print_fn(f"Project setup failed: {exc}. Starting without project context.")
-            return None
-
-    def onboard(self, description: str) -> ProjectView | None:
-        try:
-            slug = _slugify(description)
-            rel = f"projects/{slug}.md"
-            # Avoid clobber: if exists, suffix with timestamp.
-            if (Path(self.data_dir) / rel).exists():
-                slug = f"{slug}-{int(time.time())}"
-                rel = f"projects/{slug}.md"
-            meta = {
-                "project_id": slug,
-                "cwd": "",
-                "status": "active",
-                "tags": [],
-                "capabilities": [],
-                "last_summarized_session": None,
-            }
-            body = f"# {slug}\n\n## Description\n\n{description.strip()}\n\n## Learnings\n\n"
-            self.store.write_file(rel, meta, body)
-            self._append_manifest_line("projects", slug, "", description)
-            return _project_view_from_file(meta, body, slug)
-        except Exception as exc:
-            logger.exception("onboard failed: %s", exc)
-            return None
-
-    def _append_manifest_line(self, scope: str, project_id: str, cwd: str, description: str) -> None:
-        try:
-            current = self.store.read_manifest(scope)
-            new_line = (
-                f"- **{project_id}.md** | active | {description} | "
-                f"cwd:{cwd or '(none)'} | tags: "
-            )
-            if not current:
-                content = f"# {scope.title()} Manifest\n\n{new_line}\n"
-            else:
-                # Replace if line_key already present.
-                lines = current.splitlines()
-                key = f"**{project_id}.md**"
-                replaced = False
-                for i, line in enumerate(lines):
-                    if key in line:
-                        lines[i] = new_line
-                        replaced = True
-                        break
-                if not replaced:
-                    lines.append(new_line)
-                content = "\n".join(lines)
-                if not content.endswith("\n"):
-                    content += "\n"
-            self.store.write_manifest(scope, content)
-        except Exception as exc:
-            logger.warning("manifest append failed: %s", exc)
-
     # ---- slash commands --------------------------------------------------
 
     def handle_command(self, cmd: str) -> str | None:
@@ -344,7 +198,6 @@ class AssistantMemoryManager:
             return None
         try:
             parts = cmd.strip().split(maxsplit=2)
-            # parts[0] == "/memory"
             if len(parts) == 1 or (len(parts) == 2 and parts[1] == "help"):
                 return (
                     "Memory commands:\n"

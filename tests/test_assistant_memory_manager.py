@@ -45,7 +45,7 @@ def test_on_startup_returns_context_block(manager: AssistantMemoryManager):
     )
     manager.store.write_file("context/current.md", {}, "Working on CLI agent Phase 2.\n")
 
-    block = manager.on_startup(project_id=None)
+    block = manager.on_startup()
     assert "I am a faithful assistant." in block
     assert "I have curiosity and patience." in block
     assert "Eric — CS student." in block
@@ -83,44 +83,6 @@ def test_on_assistant_turn_invokes_curator(manager: AssistantMemoryManager):
     manager.curator.propose_writes.assert_called_once()
     manager.curator.apply_writes.assert_called_once()
     manager.curator.apply_manifest_updates.assert_called_once_with([{"x": 1}])
-
-
-def test_find_project_for_cwd_hit_and_miss(manager: AssistantMemoryManager, tmp_path: Path):
-    cwd = str(tmp_path / "demo-proj")
-    Path(cwd).mkdir()
-    # Miss when no file present.
-    assert manager.find_project_for_cwd(cwd) is None
-
-    from agent.assistant_memory.manager import _cwd_project_id
-    pid = _cwd_project_id(cwd)
-    manager.store.write_file(
-        f"projects/{pid}.md",
-        {"project_id": pid, "cwd": cwd, "status": "active", "tags": ["foo"]},
-        f"# {pid}\n\n## Description\n\nA cool project.\n",
-    )
-    view = manager.find_project_for_cwd(cwd)
-    assert view is not None
-    assert view.project_id == pid
-    assert view.cwd == cwd
-    assert "foo" in view.tags
-
-
-def test_onboard_for_cwd_creates_markdown(manager: AssistantMemoryManager, tmp_path: Path):
-    cwd = str(tmp_path / "fresh-proj")
-    Path(cwd).mkdir()
-    view = manager.onboard_for_cwd(cwd, print_fn=lambda *_: None)
-    assert view is not None
-
-    from agent.assistant_memory.manager import _cwd_project_id
-    pid = _cwd_project_id(cwd)
-    md_path = Path(manager.data_dir) / "projects" / f"{pid}.md"
-    assert md_path.exists()
-    text = md_path.read_text(encoding="utf-8")
-    assert "## Description" in text
-    assert pid in text
-    # Manifest updated.
-    manifest = manager.store.read_manifest("projects")
-    assert pid in manifest
 
 
 def test_handle_command_list_people(manager: AssistantMemoryManager):
@@ -247,17 +209,6 @@ def test_on_exit_runs_consolidate_then_summarize(manager: AssistantMemoryManager
     assert summarize_done.wait(timeout=2.0)
     manager.curator.consolidate_session.assert_called_once()
     manager.curator.summarize_session.assert_called_once()
-
-
-def test_projectview_rename():
-    from agent.assistant_memory import manager as m
-
-    assert hasattr(m, "ProjectView")
-    # Back-compat alias should still resolve to the same class.
-    assert m.MigratedProjectView is m.ProjectView
-    # `sessions` field has been dropped.
-    pv = m.ProjectView(project_id="p1")
-    assert not hasattr(pv, "sessions")
 
 
 def test_strip_memory_notes_in_display():

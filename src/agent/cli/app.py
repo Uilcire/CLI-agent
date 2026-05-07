@@ -19,59 +19,6 @@ from agent.tools.read_skill import read_skill as _read_skill
 log = get_logger(__name__)
 
 
-def _resolve_project(memory: AssistantMemoryManager, cwd: str) -> str | None:
-    """
-    Determine project_id for this session via user interaction.
-    Three outcomes: resume existing, onboard new, link to existing, or skip.
-    Returns project_id string or None.
-    """
-    existing = memory.find_project_for_cwd(cwd)
-
-    if existing is not None:
-        print(f"Resuming project: {existing.description} [{', '.join(existing.tags)}]")
-        return existing.project_id
-
-    print("No project found for this directory.")
-    try:
-        choice = input("Start a new project, or link to an existing one? [new/existing/skip]: ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        print("\nSkipping project setup.")
-        return None
-
-    if choice == "new":
-        project = memory.onboard_for_cwd(cwd, print_fn=print)
-        return project.project_id if project else None
-
-    if choice == "existing":
-        # Listing existing projects from the new markdown layout is best-effort.
-        files = memory.store.list_files("projects")
-        if not files:
-            print("No existing projects found. Starting without project context.")
-            return None
-        print("\nExisting projects:")
-        for i, rel in enumerate(files, 1):
-            meta, _ = memory.store.read_file(rel)
-            desc = meta.get("project_id") or rel
-            tags = ", ".join(meta.get("tags") or []) or "no tags"
-            print(f"  [{i}] {desc} — {tags}")
-        try:
-            raw = input("\nEnter number (or 0 to skip): ").strip()
-            idx = int(raw)
-            if 1 <= idx <= len(files):
-                chosen_rel = files[idx - 1]
-                meta, _ = memory.store.read_file(chosen_rel)
-                chosen_id = str(meta.get("project_id") or chosen_rel)
-                print(f"Linked to: {chosen_id}")
-                return chosen_id
-        except (ValueError, EOFError):
-            pass
-        print("Starting without project context.")
-        return None
-
-    print("Starting without project context.")
-    return None
-
-
 def _enable_memlog() -> None:
     """Render agent.assistant_memory log records as orange MEMORY panels (mirror of TOOL CALL)."""
     import logging
@@ -135,8 +82,7 @@ def main() -> None:
     log.info("Memory directory: %s", memory_dir)
     memory = AssistantMemoryManager(data_dir=memory_dir, settings=settings)
     cwd = os.getcwd()
-    project_id = _resolve_project(memory, cwd)
-    memory_context = memory.on_startup(project_id=project_id)
+    memory_context = memory.on_startup()
 
     # Discover skills and build catalog section for the system prompt.
     skill_manager = SkillManager(discover_skills(Path(cwd)))
