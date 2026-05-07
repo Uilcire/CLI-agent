@@ -1,0 +1,253 @@
+{
+  "character": {
+    "id": "6643d38d-c50e-489e-b7fd-729ef37a8e4f",
+    "name": "Orange Tabby",
+    "prompt": "orange tabby cat with friendly green eyes, soft fur, normal cat proportions, friendly companion pet",
+    "size": {
+      "width": 92,
+      "height": 92
+    },
+    "template_id": "cat",
+    "directions": 4,
+    "view": "side",
+    "created_at": "2026-05-07T06:37:17.499396+00:00"
+  },
+  "frames": {
+    "rotations": {
+      "south": "rotations/south.png",
+      "west": "rotations/west.png",
+      "east": "rotations/east.png",
+      "north": "rotations/north.png"
+    },
+    "animations": {
+      "licking-f464488c": {
+        "west": [
+          "animations/licking-f464488c/west/frame_000.png",
+          "animations/licking-f464488c/west/frame_001.png",
+          "animations/licking-f464488c/west/frame_002.png",
+          "animations/licking-f464488c/west/frame_003.png",
+          "animations/licking-f464488c/west/frame_004.png",
+          "animations/licking-f464488c/west/frame_005.png",
+          "animations/licking-f464488c/west/frame_006.png",
+          "animations/licking-f464488c/west/frame_007.png",
+          "animations/licking-f464488c/west/frame_008.png",
+          "animations/licking-f464488c/west/frame_009.png",
+          "animations/licking-f464488c/west/frame_010.png",
+          "animations/licking-f464488c/west/frame_011.png"
+        ],
+        "north": [
+          "animations/licking-f464488c/north/frame_000.png",
+          "animations/licking-f464488c/north/frame_001.png",
+          "animations/licking-f464488c/north/frame_002.png",
+          "animations/licking-f464488c/north/frame_003.png",
+          "animations/licking-f464488c/north/frame_004.png",
+          "animations/licking-f464488c/north/frame_005.png",
+          "animations/licking-f464488c/north/frame_006.png",
+          "animations/licking-f464488c/north/frame_007.png",
+          "animations/licking-f464488c/north/frame_008.png",
+          "animations/licking-f464488c/north/frame_009.png",
+          "animations/licking-f464488c/north/frame_010.png",
+          "animations/licking-f464488c/north/frame_011.png"
+        ],
+        "south": [
+          "animations/licking-f464488c/south/frame_000.png",
+          "animations/licking-f464488c/south/frame_001.png",
+          "animations/licking-f464488c/south/frame_002.png",
+          "animations/licking-f464488c/south/frame_003.png",
+          "animations/licking-f464488c/south/frame_004.png",
+          "animations/licking-f464488c/south/frame_005.png",
+          "animations/licking-f464488c/south/frame_006.png",
+          "animations/licking-f464488c/south/frame_007.png",
+          "animations/licking-f464488c/south/frame_008.png",
+          "animations/licking-f464488c/south/frame_009.png",
+          "animations/licking-f464488c/south/frame_010.png",
+          "animations/licking-f464488c/south/frame_011.png"
+        ],
+        "east": [
+          "animations/licking-f464488c/east/frame_000.png",
+          "animations/licking-f464488c/east/frame_001.png",
+          "animations/licking-f464488c/east/frame_002.png",
+          "animations/licking-f464488c/east/frame_003.png",
+          "animations/licking-f464488c/east/frame_004.png",
+          "animations/licking-f464488c/east/frame_005.png",
+          "animations/licking-f464488c/east/frame_006.png",
+          "animations/licking-f464488c/east/frame_007.png",
+          "animations/licking-f464488c/east/frame_008.png",
+          "animations/licking-f464488c/east/frame_009.png",
+          "animations/licking-f464488c/east/frame_010.png",
+          "animations/licking-f464488c/east/frame_011.png"
+        ]
+      },
+      "sitting_down-4a70e2a2": {
+        "south": [
+          "animations/sitting_down-4a70e2a2/south/frame_000.png",
+          "animations/sitting_down-4a70e2a2/south/frame_001.png",
+          "animations/sitting_down-4a70e2a2/south/frame_002.png",
+          "animations/sitting_down-4a70e2a2/south/frame_003.png",
+          "animations/sitting_down-4a70e2a2/south/frame_004.png",
+          "animations/sitting_down-4a70e2a2/south/frame_005.png",
+          "animations/sitting_down-4a70e2a2/south/frame_006.png",
+          "animations/sitting_down-4a70e2a2/south/frame_007.png"
+        ],
+        "north": [
+          "animations/sitting_down-4a70e2a2/north/frame_000.png",
+          "animations/sitting_down-4a70e2a2/north/frame_001.png",
+          "animations/sitting_down-4a70e2a2/north/frame_002.png",
+          "animations/sitting_down-4a70e2a2/north/frame_003.png",
+          "animations/sitting_down-4a70e2a2/north/frame_004.png",
+          "animations/sitting_down-4a70e2a2/north/frame_005.png",
+          "animations/sitting_down-4a70e2a2/north/frame_006.png",
+          "animations/sitting_down-4a70e2a2/north/frame_007.png"
+        ],
+        "east": [
+          "animations/sitting_down-4a70e2a2/east/frame_000.png",
+          "animations/sitting_down-4a70e2a2/east/frame_001.png",
+          "animations/sitting_down-4a70e2a2/east/frame_002.png",
+          "animations/sitting_down-4a70e2a2/east/frame_003.png",
+          "animations/sitting_down-4a70e2a2/east/frame_004.png",
+          "animations/sitting_down-4a70e2a2/east/frame_005.png",
+          "animations/sitting_down-4a70e2a2/east/frame_006.png",
+          "animations/sitting_down-4a70e2a2/east/frame_007.png"
+        ],
+        "west": [
+          "animations/sitting_down-4a70e2a2/west/frame_000.png",
+          "animations/sitting_down-4a70e2a2/west/frame_001.png",
+          "animations/sitting_down-4a70e2a2/west/frame_002.png",
+          "animations/sitting_down-4a70e2a2/west/frame_003.png",
+          "animations/sitting_down-4a70e2a2/west/frame_004.png",
+          "animations/sitting_down-4a70e2a2/west/frame_005.png",
+          "animations/sitting_down-4a70e2a2/west/frame_006.png",
+          "animations/sitting_down-4a70e2a2/west/frame_007.png"
+        ]
+      },
+      "animation-5ebf730a": {
+        "south": [
+          "animations/animation-5ebf730a/south/frame_000.png",
+          "animations/animation-5ebf730a/south/frame_001.png",
+          "animations/animation-5ebf730a/south/frame_002.png",
+          "animations/animation-5ebf730a/south/frame_003.png",
+          "animations/animation-5ebf730a/south/frame_004.png",
+          "animations/animation-5ebf730a/south/frame_005.png",
+          "animations/animation-5ebf730a/south/frame_006.png",
+          "animations/animation-5ebf730a/south/frame_007.png"
+        ],
+        "north": [
+          "animations/animation-5ebf730a/north/frame_000.png",
+          "animations/animation-5ebf730a/north/frame_001.png",
+          "animations/animation-5ebf730a/north/frame_002.png",
+          "animations/animation-5ebf730a/north/frame_003.png",
+          "animations/animation-5ebf730a/north/frame_004.png",
+          "animations/animation-5ebf730a/north/frame_005.png",
+          "animations/animation-5ebf730a/north/frame_006.png",
+          "animations/animation-5ebf730a/north/frame_007.png"
+        ],
+        "east": [
+          "animations/animation-5ebf730a/east/frame_000.png",
+          "animations/animation-5ebf730a/east/frame_001.png",
+          "animations/animation-5ebf730a/east/frame_002.png",
+          "animations/animation-5ebf730a/east/frame_003.png",
+          "animations/animation-5ebf730a/east/frame_004.png",
+          "animations/animation-5ebf730a/east/frame_005.png",
+          "animations/animation-5ebf730a/east/frame_006.png",
+          "animations/animation-5ebf730a/east/frame_007.png"
+        ],
+        "west": [
+          "animations/animation-5ebf730a/west/frame_000.png",
+          "animations/animation-5ebf730a/west/frame_001.png",
+          "animations/animation-5ebf730a/west/frame_002.png",
+          "animations/animation-5ebf730a/west/frame_003.png",
+          "animations/animation-5ebf730a/west/frame_004.png",
+          "animations/animation-5ebf730a/west/frame_005.png",
+          "animations/animation-5ebf730a/west/frame_006.png",
+          "animations/animation-5ebf730a/west/frame_007.png"
+        ]
+      },
+      "running-3ba808c6": {
+        "north": [
+          "animations/running-3ba808c6/north/frame_000.png",
+          "animations/running-3ba808c6/north/frame_001.png",
+          "animations/running-3ba808c6/north/frame_002.png",
+          "animations/running-3ba808c6/north/frame_003.png",
+          "animations/running-3ba808c6/north/frame_004.png",
+          "animations/running-3ba808c6/north/frame_005.png"
+        ],
+        "west": [
+          "animations/running-3ba808c6/west/frame_000.png",
+          "animations/running-3ba808c6/west/frame_001.png",
+          "animations/running-3ba808c6/west/frame_002.png",
+          "animations/running-3ba808c6/west/frame_003.png",
+          "animations/running-3ba808c6/west/frame_004.png",
+          "animations/running-3ba808c6/west/frame_005.png"
+        ],
+        "east": [
+          "animations/running-3ba808c6/east/frame_000.png",
+          "animations/running-3ba808c6/east/frame_001.png",
+          "animations/running-3ba808c6/east/frame_002.png",
+          "animations/running-3ba808c6/east/frame_003.png",
+          "animations/running-3ba808c6/east/frame_004.png",
+          "animations/running-3ba808c6/east/frame_005.png"
+        ],
+        "south": [
+          "animations/running-3ba808c6/south/frame_000.png",
+          "animations/running-3ba808c6/south/frame_001.png",
+          "animations/running-3ba808c6/south/frame_002.png",
+          "animations/running-3ba808c6/south/frame_003.png",
+          "animations/running-3ba808c6/south/frame_004.png",
+          "animations/running-3ba808c6/south/frame_005.png"
+        ]
+      },
+      "lying_on_belly-2ebac439": {
+        "south": [
+          "animations/lying_on_belly-2ebac439/south/frame_000.png",
+          "animations/lying_on_belly-2ebac439/south/frame_001.png",
+          "animations/lying_on_belly-2ebac439/south/frame_002.png",
+          "animations/lying_on_belly-2ebac439/south/frame_003.png",
+          "animations/lying_on_belly-2ebac439/south/frame_004.png",
+          "animations/lying_on_belly-2ebac439/south/frame_005.png",
+          "animations/lying_on_belly-2ebac439/south/frame_006.png",
+          "animations/lying_on_belly-2ebac439/south/frame_007.png",
+          "animations/lying_on_belly-2ebac439/south/frame_008.png",
+          "animations/lying_on_belly-2ebac439/south/frame_009.png"
+        ],
+        "north": [
+          "animations/lying_on_belly-2ebac439/north/frame_000.png",
+          "animations/lying_on_belly-2ebac439/north/frame_001.png",
+          "animations/lying_on_belly-2ebac439/north/frame_002.png",
+          "animations/lying_on_belly-2ebac439/north/frame_003.png",
+          "animations/lying_on_belly-2ebac439/north/frame_004.png",
+          "animations/lying_on_belly-2ebac439/north/frame_005.png",
+          "animations/lying_on_belly-2ebac439/north/frame_006.png",
+          "animations/lying_on_belly-2ebac439/north/frame_007.png",
+          "animations/lying_on_belly-2ebac439/north/frame_008.png",
+          "animations/lying_on_belly-2ebac439/north/frame_009.png"
+        ],
+        "east": [
+          "animations/lying_on_belly-2ebac439/east/frame_000.png",
+          "animations/lying_on_belly-2ebac439/east/frame_001.png",
+          "animations/lying_on_belly-2ebac439/east/frame_002.png",
+          "animations/lying_on_belly-2ebac439/east/frame_003.png",
+          "animations/lying_on_belly-2ebac439/east/frame_004.png",
+          "animations/lying_on_belly-2ebac439/east/frame_005.png",
+          "animations/lying_on_belly-2ebac439/east/frame_006.png",
+          "animations/lying_on_belly-2ebac439/east/frame_007.png",
+          "animations/lying_on_belly-2ebac439/east/frame_008.png",
+          "animations/lying_on_belly-2ebac439/east/frame_009.png"
+        ],
+        "west": [
+          "animations/lying_on_belly-2ebac439/west/frame_000.png",
+          "animations/lying_on_belly-2ebac439/west/frame_001.png",
+          "animations/lying_on_belly-2ebac439/west/frame_002.png",
+          "animations/lying_on_belly-2ebac439/west/frame_003.png",
+          "animations/lying_on_belly-2ebac439/west/frame_004.png",
+          "animations/lying_on_belly-2ebac439/west/frame_005.png",
+          "animations/lying_on_belly-2ebac439/west/frame_006.png",
+          "animations/lying_on_belly-2ebac439/west/frame_007.png",
+          "animations/lying_on_belly-2ebac439/west/frame_008.png",
+          "animations/lying_on_belly-2ebac439/west/frame_009.png"
+        ]
+      }
+    }
+  },
+  "export_version": "2.0",
+  "export_date": "2026-05-07T07:25:22.556669"
+}

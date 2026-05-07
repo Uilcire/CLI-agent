@@ -128,7 +128,7 @@ class AssistantMemoryManager:
 
         threading.Thread(target=_run_detector, daemon=True).start()
 
-    def on_assistant_turn(self, content: str) -> None:
+    def on_assistant_turn(self, content: str, run_curator: bool = True) -> None:
         try:
             entry = {"role": "assistant", "content": content}
             self.recent_turns.append(entry)
@@ -137,6 +137,9 @@ class AssistantMemoryManager:
             self._active_session_messages.append(entry)
         except Exception as exc:
             logger.warning("on_assistant_turn append failed: %s", exc)
+            return
+
+        if not run_curator:
             return
 
         last_user = ""

@@ -9,3 +9,14 @@ __pycache__/
 dist/
 *.egg-info/
 agent-memory/
+
+# Frontend build artifacts
+web/node_modules/
+web/dist/
+
+# Local IDE / Claude state
+.claude/
+
+# Source assets not used at runtime
+cat/
+mockup/
