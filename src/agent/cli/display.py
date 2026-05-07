@@ -5,7 +5,7 @@ import re
 import threading
 from typing import Literal
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.box import ROUNDED, HEAVY
 from rich.markup import escape
@@ -24,6 +24,26 @@ PROMPT_STYLE = "bold light_green"
 TOOL_CALL_BORDER = "#8B5CF6"  # purple-violet
 TOOL_RESULT_BORDER = "#6B7280"  # dim gray
 MEM_BORDER = "#FB923C"  # orange — memory events
+
+# Cat ASCII art and bubble tail — assistant speaks from diagonally above the cat
+_CAT_ART = " /\\_/\\\n( o.o )\n > ^ < "
+_BUBBLE_TAIL = "  ╰──╮"
+_CAT_INDENT = "      "
+
+
+def _cat_bubble(content) -> Group:
+    """Wrap *content* in a speech bubble with the cat below-right."""
+    bubble = Panel(
+        content,
+        title=f"[bold {NEON_BLUE}]🐱[/bold {NEON_BLUE}]",
+        border_style=NEON_BLUE,
+        box=ROUNDED,
+        padding=(0, 1),
+    )
+    tail = Text(_BUBBLE_TAIL, style="dim")
+    cat = Text("\n".join(_CAT_INDENT + line for line in _CAT_ART.splitlines()),
+               style="bright_white")
+    return Group(bubble, tail, cat)
 
 
 def _has_markdown(text: str) -> bool:
@@ -148,14 +168,9 @@ def stream_assistant(events) -> str:
     tool_mode = False
     note_filter = _MemNoteFilter()
 
-    w = console.width
-    sep = "-" * max(0, w - len("Assistant: "))
-    console.print(f"[bold {NEON_BLUE}]\nAssistant:[/bold {NEON_BLUE}]")
-    console.print(sep, style="dim")
-
-    # Live display for in-progress markdown rendering
+    # Live display for in-progress markdown rendering (inside cat bubble)
     live = Live(
-        Markdown("", code_theme="monokai"),
+        _cat_bubble(Markdown("", code_theme="monokai")),
         console=console,
         refresh_per_second=10,
         transient=False,
@@ -177,7 +192,7 @@ def stream_assistant(events) -> str:
                 if not live.is_started:
                     live.start()
                     mem_live_active(True)
-                live.update(Markdown(_balance_fences(accum), code_theme="monokai"))
+                live.update(_cat_bubble(Markdown(_balance_fences(accum), code_theme="monokai")))
 
             elif event_type == "tool_call":
                 # Pause markdown rendering — tool output can't overlay a Live region
@@ -234,7 +249,7 @@ def stream_assistant(events) -> str:
         tail = note_filter.flush()
         if tail and live.is_started:
             content_parts.append(tail)
-            live.update(Markdown(_balance_fences("".join(content_parts)), code_theme="monokai"))
+            live.update(_cat_bubble(Markdown(_balance_fences("".join(content_parts)), code_theme="monokai")))
         if live.is_started:
             live.stop()
         mem_live_active(False)
@@ -258,19 +273,12 @@ def print_banner() -> None:
 
 
 def print_assistant(text: str) -> None:
-    """Print assistant reply, rendering markdown for terminal readability."""
+    """Print assistant reply as a cat speech bubble."""
     console = Console()
     if not text or not text.strip():
         return
-    w = console.width
-    sep = "-" * max(0, w - len("Assistant: "))
-    console.print(f"[bold {NEON_BLUE}]\nAssistant:[/bold {NEON_BLUE}]")
-    console.print(f"{sep}\n", style="dim")
-    if _has_markdown(text):
-        md = Markdown(text, code_theme="monokai")
-        console.print(md)
-    else:
-        console.print(text)
+    content = Markdown(text, code_theme="monokai") if _has_markdown(text) else Text(text)
+    console.print(_cat_bubble(content))
 
 
 def prompt_user() -> str:
